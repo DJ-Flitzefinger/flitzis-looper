@@ -65,14 +65,7 @@ fn unavailable(reason: impl std::fmt::Display) -> Failure {
     Failure::Unavailable(reason.to_string().chars().take(240).collect())
 }
 fn admit(parts: &[usize]) -> Result<usize, Failure> {
-    let bytes = budget::sum(parts).map_err(unavailable)?;
-    if bytes > LIMIT {
-        Err(unavailable(
-            "range metadata exceeds 512 MiB preparation budget",
-        ))
-    } else {
-        Ok(bytes)
-    }
+    budget::sum(parts).map_err(unavailable)
 }
 
 pub(super) fn half_double_drift(
@@ -135,6 +128,7 @@ fn serialize(
         grid_bytes,
         size_of::<LoadedAnalysis>(),
     ])?;
+    let _serialization = reserve_workspace(string_bound).map_err(unavailable)?;
     let encoded = serde_json::to_string(tree).map_err(unavailable)?;
     admit(&[
         source_live,
@@ -185,6 +179,7 @@ pub(super) fn apply(
     let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         check(cancelled)?;
         admit(&[base_core, SMALL])?;
+        let _header = reserve_workspace(SMALL).map_err(unavailable)?;
         let primary = json!({"schema_version":tree["schema_version"],"backend":tree["backend"],
             "policy":tree["policy"],"status":tree["status"],"bpm":tree["bpm"]});
         let block = json!({"minimum_bpm":range.minimum_bpm,"maximum_bpm":range.maximum_bpm,
@@ -211,7 +206,9 @@ pub(super) fn apply(
     let rejected = match prepared {
         Ok(Ok(encoded)) => encoded,
         Ok(Err(Failure::Cancelled)) => return Err(Failure::Cancelled),
-        Ok(Err(Failure::NoChoice)) => return Ok(no_method("QM has no independently admitted tempo")),
+        Ok(Err(Failure::NoChoice)) => {
+            return Ok(no_method("QM has no independently admitted tempo"));
+        }
         Ok(Err(Failure::Unavailable(reason))) => return Ok(no_method(&reason)),
         Err(_) => return Ok(no_method("range metadata preparation panicked")),
     };
@@ -226,6 +223,7 @@ pub(super) fn apply(
         // The old core remains a conservative floor. Keep the rejected string,
         // its small header and the optional observation live simultaneously.
         let work_core = admit(&[base_core, rejected.capacity(), SMALL])?;
+        let _header = reserve_workspace(SMALL).map_err(unavailable)?;
         let observed = observe(work_core)?;
         check(cancelled)?;
         if !range.contains(observed.bpm) {

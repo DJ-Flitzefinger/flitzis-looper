@@ -193,9 +193,23 @@ class AppTempoMethod(BaseModel):
         return self
 
     def _validate_estimate(self) -> None:
-        native = isinstance(self.execution, (NativeCpuExecutionReceipt, NativeCudaExecutionReceipt))
-        if native != (self.frontend_id == NATIVE_MODEL.frontend_id) or (
-            native and self.model_sha256 != NATIVE_MODEL.sha256
+        native_execution = isinstance(
+            self.execution, (NativeCpuExecutionReceipt, NativeCudaExecutionReceipt)
+        )
+        native_frontend = self.frontend_id == NATIVE_MODEL.frontend_id
+        unavailable_native = (
+            self.execution is None
+            and self.schema_version == 11
+            and self.approximate_tempo is not None
+            and self.approximate_tempo.kind == "source_energy"
+            and self.approximate_tempo.original is None
+        )
+        if (native_execution and not native_frontend) or (
+            native_frontend
+            and (
+                self.model_sha256 != NATIVE_MODEL.sha256
+                or not (native_execution or unavailable_native)
+            )
         ):
             message = "Native BeatThis provenance differs from its execution receipt"
             raise ValueError(message)

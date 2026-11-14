@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import stat
 import struct
@@ -13,9 +14,9 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import ConfigDict, FiniteFloat, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, FiniteFloat, TypeAdapter, ValidationError
 
 from flitzis_looper.analysis.acquisition import copy_to_quarantine
 from flitzis_looper.analysis.artifacts import NATIVE_MODEL, Digest, file_digest
@@ -29,28 +30,35 @@ from flitzis_looper.analysis.execution import (
     NATIVE_CUDA_PACKAGE_SHA,
     NativeCudaError,
     NativeCudaExecutionReceipt,
-    NativeCudaPolicy,
     NativeCudaRuntime,
+    NativeCudaStartupError,
     validate_execution,
 )
-from flitzis_looper.analysis.process import offline_work_scope, run_owned_command
+from flitzis_looper.analysis.process import (
+    offline_work_scope,
+    run_owned_command,
+)
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.recording_paths import _pin_ancestors, _windows_pin
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.contracts import MonoPcmInput
+    from flitzis_looper.analysis.process import OwnedCommandResult
     from flitzis_looper.controller.stem_resources import StemResourceGuard
 
 NATIVE_PROFILE: Final = "native-cpu-v3"
 NATIVE_CUDA_PROFILE: Final = "native-cuda-v4"
+NATIVE_WORKER_PROTOCOL: Final = 1
 _WORKER_EXE = "native-beat-this-worker.exe"
 _EXE_LIMIT = 64 * 1024 * 1024
+_CRT_LIMIT = 8 * 1024 * 1024
 _MANIFEST_LIMIT = 4096
 _CANCEL_MARKER = b"cancel"
 _ORT_MANIFEST = "ort/step23-runtime.json"
 _ORT_PACKAGE = "ort/step23-package.json"
 _CUDA_PACKAGE = "cuda/step23-package.json"
+CRT_DLLS = ("msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll")
 _CUDA_MANIFESTS = {
     "cuda/step23-runtime.json": (
         220,
@@ -93,7 +101,9 @@ class NativeCudaWorkerManifest:
     schema_version: Literal[4]
     profile: Literal["native-cuda-v4"]
     executable_sha256: Digest
-    execution_policy: NativeCudaPolicy
+    execution_policy: Literal["cpu", "cuda", "auto"]
+    startup_fault_protocol: Literal[1] | None = None
+    crt_files: dict[str, tuple[Annotated[int, Field(gt=0, le=_CRT_LIMIT)], Digest]] | None = None
 
 
 _MANIFEST = TypeAdapter(NativeWorkerManifest)
@@ -106,6 +116,17 @@ class NativeWorkerConfiguration:
     scratch_dir: Path
     executable_sha256: str
     execution_policy: Literal["cpu", "cuda", "auto"] = "cpu"
+    startup_fault_protocol: Literal[1] | None = None
+    crt_files: dict[str, tuple[int, str]] | None = None
+
+
+def is_production_worker(configuration: object) -> bool:
+    """Recognize the Windows package closure selected by production setup."""
+    return (
+        isinstance(configuration, NativeWorkerConfiguration)
+        and configuration.execution_policy in {"cpu", "auto"}
+        and configuration.startup_fault_protocol == NATIVE_WORKER_PROTOCOL
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,9 +167,17 @@ class _NativeCudaFault(_NativeInput):
     cuda_error: NativeCudaError
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeCudaStartupFault(_NativeInput):
+    cuda_startup_error: NativeCudaStartupError
+
+
+type _CudaFault = _NativeCudaFault | _NativeCudaStartupFault
+
+
 _RESULT = TypeAdapter(_NativeResult)
 _CUDA_RESULT = TypeAdapter(_NativeCudaResult)
-_CUDA_FAULT = TypeAdapter(_NativeCudaFault)
+_CUDA_FAULT: TypeAdapter[_CudaFault] = TypeAdapter(_CudaFault)
 
 
 def _plain_file(path: Path, maximum: int) -> int:
@@ -184,13 +213,27 @@ def _cuda_assets(root: Path) -> dict[str, tuple[int, str]]:
     }
 
 
+def _validate_crt_layout(folder: Path) -> None:
+    if folder.is_symlink() or folder.is_junction() or not folder.is_dir():
+        msg = "invalid Native BeatThis CRT directory"
+        raise ValueError(msg)
+    if {path.name for path in folder.iterdir()} != set(CRT_DLLS):
+        msg = "unexpected Native BeatThis CRT entries"
+        raise ValueError(msg)
+    for name in CRT_DLLS:
+        _plain_file(folder / name, _CRT_LIMIT)
+
+
 def _package_files(
-    root: Path, *, cuda: bool = False, installed: bool = True
+    root: Path, *, cuda: bool = False, installed: bool = True, with_crt: bool = False
 ) -> dict[str, tuple[int, str]]:
     # Both DLL loading directories are closed sets.
     assets = dict(_ASSETS if installed else _SOURCE_ASSETS)
     directories = ("ort", "cuda") if cuda else ("ort",)
     allowed = {_WORKER_EXE, "beat-this-dynamic.onnx", "soxr.dll", "manifest.json", *directories}
+    if with_crt:
+        _validate_crt_layout(root / "crt")
+        allowed.add("crt")
     if {path.name for path in root.iterdir()} - allowed:
         msg = "unexpected Native BeatThis package entry"
         raise ValueError(msg)
@@ -233,8 +276,20 @@ def load_native_configuration(
             cpu = _MANIFEST.validate_json(raw, strict=True)
             return NativeWorkerConfiguration(manifest, scratch_dir, cpu.executable_sha256)
         cuda = _CUDA_MANIFEST.validate_json(raw, strict=True)
+        if cuda.crt_files is None:
+            if cuda.startup_fault_protocol is not None:
+                msg = "Production Native BeatThis manifest is missing private CRT evidence"
+                raise NativeWorkerConfigurationError(msg)
+        elif cuda.startup_fault_protocol != 1 or set(cuda.crt_files) != set(CRT_DLLS):
+            msg = "Native BeatThis CRT manifest differs from the production closure"
+            raise NativeWorkerConfigurationError(msg)
         return NativeWorkerConfiguration(
-            manifest, scratch_dir, cuda.executable_sha256, cuda.execution_policy
+            manifest,
+            scratch_dir,
+            cuda.executable_sha256,
+            cuda.execution_policy,
+            cuda.startup_fault_protocol,
+            cuda.crt_files,
         )
     except ValidationError as error:
         message = "Selected Native BeatThis manifest differs from the supported profile"
@@ -244,7 +299,12 @@ def load_native_configuration(
 def verify_native_package(configuration: NativeWorkerConfiguration) -> None:
     """Verify the retained worker and its exact installed assets."""
     root = configuration.manifest.parent
-    assets = _package_files(root, cuda=configuration.execution_policy != "cpu")
+    assets = _package_files(
+        root,
+        cuda=configuration.execution_policy != "cpu",
+        with_crt=configuration.crt_files is not None,
+    )
+    assets.update({f"crt/{name}": pin for name, pin in (configuration.crt_files or {}).items()})
     for name, (size, expected) in assets.items():
         if file_digest(root / name, max_bytes=size) != expected:
             msg = f"Native BeatThis asset digest differs: {name}"
@@ -255,15 +315,24 @@ def verify_native_package(configuration: NativeWorkerConfiguration) -> None:
 
 
 def stage_native_package(
-    package: Path, stage: Path, *, cuda_policy: NativeCudaPolicy | None = None
+    package: Path,
+    stage: Path,
+    *,
+    cuda_policy: Literal["cpu", "cuda", "auto"] | None = None,
+    startup_fault_protocol: Literal[1] | None = None,
 ) -> None:
     """Copy only named, checked artifacts from an explicit local package."""
     if not package.is_absolute() or package.is_symlink() or package.is_junction():
         msg = "Native BeatThis package must be an absolute ordinary directory"
         raise ValueError(msg)
-    assets = _package_files(package, cuda=cuda_policy is not None, installed=False)
+    with_crt = startup_fault_protocol == 1
+    if (with_crt and cuda_policy is None) or (cuda_policy == "cpu" and not with_crt):
+        msg = "The production BeatThis package requires an explicit policy and private CRT"
+        raise ValueError(msg)
+    with_cuda = cuda_policy in {"auto", "cuda"}
+    assets = _package_files(package, cuda=with_cuda, installed=False, with_crt=with_crt)
     (stage / "ort").mkdir()
-    if cuda_policy is not None:
+    if with_cuda:
         (stage / "cuda").mkdir()
     for name, (size, expected) in assets.items():
         copied = copy_to_quarantine(package / name, stage / name, max_bytes=size)
@@ -275,8 +344,26 @@ def stage_native_package(
     if cuda_policy is None:
         manifest = _MANIFEST.dump_json(NativeWorkerManifest(3, NATIVE_PROFILE, binary.sha256))
     else:
+        crt_files = None
+        if with_crt:
+            (stage / "crt").mkdir()
+            crt_files = {}
+            for name in CRT_DLLS:
+                relative = Path("crt") / name
+                copied = copy_to_quarantine(
+                    package / relative, stage / relative, max_bytes=_CRT_LIMIT
+                )
+                crt_files[name] = (copied.size_bytes, copied.sha256)
         manifest = _CUDA_MANIFEST.dump_json(
-            NativeCudaWorkerManifest(4, NATIVE_CUDA_PROFILE, binary.sha256, cuda_policy)
+            NativeCudaWorkerManifest(
+                4,
+                NATIVE_CUDA_PROFILE,
+                binary.sha256,
+                cuda_policy,
+                startup_fault_protocol,
+                crt_files,
+            ),
+            exclude_none=True,
         )
     (stage / "manifest.json").write_bytes(manifest)
 
@@ -306,25 +393,32 @@ def _write_ort_manifests(stage: Path) -> None:
             stream.write(data)
 
 
-def require_native_cpu_capability() -> None:
-    from flitzis_looper_audio import AudioEngine  # noqa: PLC0415
+def require_native_cpu_capability(*, engine_type: object | None = None) -> None:
+    if engine_type is None:
+        from flitzis_looper_audio import AudioEngine  # noqa: PLC0415
 
-    version = getattr(AudioEngine, "BEAT_THIS_NATIVE_CPU_API_VERSION", None)
+        engine_type = AudioEngine
+    version = getattr(engine_type, "BEAT_THIS_NATIVE_CPU_API_VERSION", None)
     if os.name != "nt" or type(version) is not int or version != 1:
         message = "Native BeatThis CPU selection requires the matching App Native library"
         raise ValueError(message)
 
 
-def require_native_worker_capability(configuration: NativeWorkerConfiguration) -> None:
+def require_native_worker_capability(
+    configuration: NativeWorkerConfiguration, *, engine_type: object | None = None
+) -> None:
     """Require the selected worker protocol on the App library before activation."""
     if configuration.execution_policy == "cpu":
-        require_native_cpu_capability()
+        require_native_cpu_capability(engine_type=engine_type)
         return
-    from flitzis_looper_audio import AudioEngine  # noqa: PLC0415
+    if engine_type is None:
+        from flitzis_looper_audio import AudioEngine  # noqa: PLC0415
 
-    version = getattr(AudioEngine, "BEAT_THIS_NATIVE_CUDA_API_VERSION", None)
-    if os.name != "nt" or type(version) is not int or version != 1:
-        msg = "Native BeatThis CUDA selection requires the matching App Native library"
+        engine_type = AudioEngine
+    version = getattr(engine_type, "BEAT_THIS_NATIVE_CUDA_API_VERSION", None)
+    supported = (2,) if configuration.startup_fault_protocol is not None else (1, 2)
+    if os.name != "nt" or type(version) is not int or version not in supported:
+        msg = "Native BeatThis CUDA selection requires a matching App Native CUDA API"
         raise ValueError(msg)
 
 
@@ -370,10 +464,13 @@ class _Attempt:
     cancel: Event
     guard: StemResourceGuard
     limits: WorkerLimits
+    crt_dir: Path | None = None
+    cuda_cache_path: Path | None = None
+    cuda_device_uuid: str | None = None
 
     def run(
         self, *, cuda: bool, allow_fallback: bool = False
-    ) -> tuple[BeatPredictions, _NativePredictions] | _NativeCudaFault:
+    ) -> tuple[BeatPredictions, _NativePredictions] | _CudaFault:
         if self.cancel.is_set():
             msg = "cancelled"
             raise RuntimeError(msg)
@@ -390,21 +487,6 @@ class _Attempt:
                 reason = "resource_disk_full"
                 raise RuntimeError(reason)
             marker = output / "cancel"
-            package = _CUDA_PACKAGE if cuda else _ORT_PACKAGE
-            digest = NATIVE_CUDA_PACKAGE_SHA if cuda else NATIVE_CPU_PACKAGE_SHA
-            env = child_environment({
-                "SystemRoot": os.environ["SYSTEMROOT"],
-                "TEMP": name,
-                "TMP": name,
-                CANCEL_PATH_ENV: str(marker),
-                "FLITZIS_TRIAL_ORT_PACKAGE": str(self.executable.parent / package),
-                "FLITZIS_TRIAL_ORT_PACKAGE_SHA256": digest,
-                "FLITZIS_TRIAL_ORT_LOAD_POLICY": "package-system32",
-            })
-            if cuda:
-                cache = output / "cuda-cache"
-                cache.mkdir()
-                env["CUDA_CACHE_PATH"] = str(cache)
             retired = Event()
             result = run_owned_command(
                 [
@@ -417,7 +499,7 @@ class _Attempt:
                     name,
                 ],
                 cwd=output,
-                env=env,
+                env=self.environment(output, marker, cuda=cuda),
                 cancel=self.cancel,
                 retired=retired,
                 limits=self.limits,
@@ -439,7 +521,7 @@ class _Attempt:
                 _validate_input(fault, self.pcm, self.mono_sha)
                 return fault
             if result.reason != "ok" or result.returncode != 0:
-                raise RuntimeError(result.reason)
+                raise _worker_failure(result, cuda=cuda)
             receipt = (
                 _CUDA_RESULT.validate_json(result.stdout, strict=True)
                 if cuda
@@ -450,19 +532,48 @@ class _Attempt:
             )
             return predictions, receipt
 
+    def environment(self, output: Path, marker: Path, *, cuda: bool) -> dict[str, str]:
+        package = _CUDA_PACKAGE if cuda else _ORT_PACKAGE
+        digest = NATIVE_CUDA_PACKAGE_SHA if cuda else NATIVE_CPU_PACKAGE_SHA
+        env = child_environment({
+            "SystemRoot": os.environ["SYSTEMROOT"],
+            "TEMP": str(output),
+            "TMP": str(output),
+            CANCEL_PATH_ENV: str(marker),
+            "FLITZIS_TRIAL_ORT_PACKAGE": str(self.executable.parent / package),
+            "FLITZIS_TRIAL_ORT_PACKAGE_SHA256": digest,
+            "FLITZIS_TRIAL_ORT_LOAD_POLICY": "package-system32",
+        })
+        if cuda:
+            cache = self.cuda_cache_path
+            if cache is None:
+                cache = output / "cuda-cache"
+                cache.mkdir()
+            env["CUDA_CACHE_PATH"] = str(cache)
+            if self.cuda_device_uuid is not None:
+                env["CUDA_VISIBLE_DEVICES"] = self.cuda_device_uuid
+        if self.crt_dir is not None:
+            env["FLITZIS_BEAT_THIS_CRT"] = str(self.crt_dir)
+        return env
+
+
+def _worker_failure(result: OwnedCommandResult, *, cuda: bool) -> RuntimeError:
+    provider = "CUDAExecutionProvider" if cuda else "CPUExecutionProvider"
+    diagnostics = result.stderr or (result.stdout if result.returncode == 70 else b"")
+    detail = " ".join(diagnostics.decode("utf-8", "replace").split())[-700:]
+    message = f"{provider}: {result.reason} (exit {result.returncode})"
+    return RuntimeError(f"{message}: {detail}" if detail else message)
+
 
 def _run_selected(
-    attempt: _Attempt, policy: Literal["cpu", "auto", "cuda"]
+    attempt: _Attempt, policy: Literal["cpu", "auto", "cuda"], cache_error: str | None = None
 ) -> tuple[BeatPredictions, NativeCudaExecutionReceipt | None]:
     if policy == "cpu":
         result = attempt.run(cuda=False)
-        assert not isinstance(result, _NativeCudaFault)
+        assert isinstance(result, tuple)
         return result[0], None
 
-    result = attempt.run(cuda=True, allow_fallback=policy == "auto")
-    if isinstance(result, _NativeCudaFault):
-        # The GPU job, both readers and scratch have ended. This
-        # second guarded child uses the same executable, PCM and pinned graph.
+    if cache_error is not None:
         receipt = NativeCudaExecutionReceipt(
             1,
             policy,
@@ -472,15 +583,37 @@ def _run_selected(
             "1.24.4",
             24,
             NATIVE_CPU_PACKAGE_SHA,
-            result.cuda,
             None,
-            "cuda_device_error",
-            result.cuda_error,
+            None,
+            "cuda_cache_unavailable",
+            None,
+            cuda_cache_error=cache_error,
         )
         validate_execution(receipt, policy)
-        cpu = attempt.run(cuda=False)
-        assert not isinstance(cpu, _NativeCudaFault)
-        return cpu[0], receipt
+        return _run_cpu_fallback(attempt, receipt)
+
+    result = attempt.run(cuda=True, allow_fallback=policy == "auto")
+    if isinstance(result, (_NativeCudaFault, _NativeCudaStartupFault)):
+        # The CUDA job, both readers and scratch have ended. This
+        # second guarded child uses the same executable, PCM and pinned graph.
+        startup = result.cuda_startup_error if isinstance(result, _NativeCudaStartupFault) else None
+        receipt = NativeCudaExecutionReceipt(
+            1,
+            policy,
+            "cpu",
+            None,
+            "float32",
+            "1.24.4",
+            24,
+            NATIVE_CPU_PACKAGE_SHA,
+            result.cuda if isinstance(result, _NativeCudaFault) else None,
+            None,
+            startup.fallback_reason() if startup is not None else "cuda_device_error",
+            result.cuda_error if isinstance(result, _NativeCudaFault) else None,
+            startup,
+        )
+        validate_execution(receipt, policy)
+        return _run_cpu_fallback(attempt, receipt)
     predictions, cuda_result = result
     assert isinstance(cuda_result, _NativeCudaResult)
     receipt = NativeCudaExecutionReceipt(
@@ -501,8 +634,57 @@ def _run_selected(
     return predictions, receipt
 
 
+def _run_cpu_fallback(
+    attempt: _Attempt, receipt: NativeCudaExecutionReceipt
+) -> tuple[BeatPredictions, NativeCudaExecutionReceipt]:
+    try:
+        cpu = attempt.run(cuda=False)
+    except (OSError, RuntimeError, ValueError) as error:
+        cuda = receipt.cuda_cache_error or receipt.cuda_startup_error or receipt.cuda_error
+        msg = f"CUDAExecutionProvider: {receipt.fallback_reason}: {cuda}; {error}"
+        raise RuntimeError(msg) from error
+    assert isinstance(cpu, tuple)
+    return cpu[0], receipt
+
+
+def _prepare_cache(
+    configuration: NativeWorkerConfiguration, cancel: Event
+) -> tuple[Path | None, str | None, str | None]:
+    from flitzis_looper.analysis.beat_cuda_cache import ensure_cuda_cache  # noqa: PLC0415
+
+    status = ensure_cuda_cache(configuration, cancel)
+    if status["status"] == "ready" and status["cache_path"] is not None:
+        return Path(status["cache_path"]), status["device_uuid"], None
+    error = " ".join(f"{status['status']}: {status['detail']}".split())[:512]
+    if configuration.execution_policy == "cuda" or status["status"] != "unavailable":
+        message = f"CUDAExecutionProvider: {error}"
+        raise RuntimeError(message)
+    return None, None, error
+
+
+def _pin_crt(pins: ExitStack, directory: Path, files: dict[str, tuple[int, str]]) -> None:
+    _pin_ancestors(pins, directory)
+    for name, (size, checksum) in files.items():
+        crt = pins.enter_context(_windows_pin(directory / name, directory=False))
+        meta = os.fstat(crt)
+        with os.fdopen(os.dup(crt), "rb") as binary:
+            if (
+                getattr(meta, "st_file_attributes", 0) & 0x400
+                or meta.st_size != size
+                or hashlib.file_digest(binary, "sha256").hexdigest() != checksum
+            ):
+                msg = f"Native BeatThis CRT identity differs: {name}"
+                raise ValueError(msg)
+
+
 def run_native_worker(
-    configuration: NativeWorkerConfiguration, pcm: MonoPcmInput, mono_sha: str, cancel: Event
+    configuration: NativeWorkerConfiguration,
+    pcm: MonoPcmInput,
+    mono_sha: str,
+    cancel: Event,
+    *,
+    cuda_cache_path: Path | None = None,
+    cuda_device_uuid: str | None = None,
 ) -> tuple[BeatPredictions, NativeCudaExecutionReceipt | None]:
     """Retain the selected installation and PCM owner through each settled child."""
     from flitzis_looper.controller.stem_resources import StemResourceGuard  # noqa: PLC0415
@@ -511,13 +693,28 @@ def run_native_worker(
     exe = root / _WORKER_EXE
     use_cuda = configuration.execution_policy != "cpu"
     guard = StemResourceGuard()
+    cache_error = None
+    if use_cuda and configuration.startup_fault_protocol is not None and cuda_cache_path is None:
+        cuda_cache_path, cuda_device_uuid, cache_error = _prepare_cache(configuration, cancel)
+    if (
+        cuda_device_uuid is not None
+        and re.fullmatch(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", cuda_device_uuid)
+        is None
+    ):
+        msg = "Invalid CUDA worker device UUID"
+        raise ValueError(msg)
     with offline_work_scope(cancel), ExitStack() as pins:
         if reason := guard.entry_reason():
             raise RuntimeError(reason)
         _pin_ancestors(pins, root / "ort")
         if use_cuda:
             _pin_ancestors(pins, root / "cuda")
-        _package_files(root, cuda=use_cuda)
+        if cuda_cache_path is not None:
+            _pin_ancestors(pins, cuda_cache_path)
+        crt_dir = root / "crt" if configuration.crt_files is not None else None
+        _package_files(root, cuda=use_cuda, with_crt=crt_dir is not None)
+        if crt_dir is not None and configuration.crt_files is not None:
+            _pin_crt(pins, crt_dir, configuration.crt_files)
         descriptor = pins.enter_context(_windows_pin(exe, directory=False))
         meta = os.fstat(descriptor)
         if getattr(meta, "st_file_attributes", 0) & 0x400 or not 0 < meta.st_size <= _EXE_LIMIT:
@@ -528,9 +725,18 @@ def run_native_worker(
                 msg = "Native BeatThis executable digest differs"
                 raise ValueError(msg)
         attempt = _Attempt(
-            exe, configuration.scratch_dir, pcm, mono_sha, cancel, guard, WorkerLimits()
+            exe,
+            configuration.scratch_dir,
+            pcm,
+            mono_sha,
+            cancel,
+            guard,
+            WorkerLimits(),
+            crt_dir,
+            cuda_cache_path,
+            cuda_device_uuid,
         )
-        return _run_selected(attempt, configuration.execution_policy)
+        return _run_selected(attempt, configuration.execution_policy, cache_error)
 
 
 def _validate_input(receipt: _NativeInput, pcm: MonoPcmInput, mono_sha: str) -> None:

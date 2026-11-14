@@ -40,6 +40,13 @@ pub enum Provider {
     },
 }
 
+/// ORT status boundaries that can identify a provider startup failure.
+#[derive(Clone, Copy)]
+pub enum ModelStartupStage {
+    ProviderRegistration,
+    SessionInitialization,
+}
+
 impl BeatModel {
     /// Verify the actual immutable graph bytes before ORT parses them.
     /// Only self-contained graphs emitted by the checked exporter are supported.
@@ -70,8 +77,8 @@ impl BeatModel {
             Some(profile),
             provider,
             cancelled,
-            &|_| {},
             None,
+            |_, _, _| {},
         )
     }
 
@@ -88,8 +95,8 @@ impl BeatModel {
             Some(profile),
             provider,
             &|| context.cancelled(),
-            &|result| context.record(result),
             Some(context),
+            |_, _, _| {},
         )
     }
 
@@ -101,6 +108,7 @@ impl BeatModel {
         profile: Option<&Path>,
         provider: Provider,
         context: &crate::trial_lifetime::Context,
+        observe_failure: impl FnMut(ModelStartupStage, ort::ErrorCode, &str),
     ) -> Result<Self, String> {
         let model = Self::load_completed(
             graph,
@@ -108,8 +116,8 @@ impl BeatModel {
             profile,
             provider,
             &|| context.cancelled(),
-            &|result| context.record(result),
             Some(context),
+            observe_failure,
         )?;
         if model.fixed_frames.is_some() {
             return Err("BeatThis worker requires a dynamic-time graph".into());
@@ -123,8 +131,8 @@ impl BeatModel {
         profile: Option<&Path>,
         provider: Provider,
         cancelled: &dyn Fn() -> bool,
-        completion: &dyn Fn(Result<(), String>),
         context: Option<&crate::trial_lifetime::Context>,
+        mut observe_failure: impl FnMut(ModelStartupStage, ort::ErrorCode, &str),
     ) -> Result<Self, String> {
         checkpoint(cancelled)?;
         validate_graph_checked(graph, expected_sha256, cancelled)?;
@@ -149,7 +157,9 @@ impl BeatModel {
             ],
         };
         checkpoint(cancelled)?;
-        let builder = trial_ort::session_builder(&providers)?;
+        let builder = trial_ort::session_builder_observed(&providers, |code, message| {
+            observe_failure(ModelStartupStage::ProviderRegistration, code, message);
+        })?;
         let builder = if let Some(profile) = profile {
             builder.with_profiling(profile).map_err(|e| e.to_string())?
         } else {
@@ -158,7 +168,9 @@ impl BeatModel {
                 .map_err(|e| e.to_string())?
         };
         checkpoint(cancelled)?;
-        let mut session = trial_ort::commit(builder, graph, context)?;
+        let mut session = trial_ort::commit_observed(builder, graph, context, |code, message| {
+            observe_failure(ModelStartupStage::SessionInitialization, code, message);
+        })?;
         let validation = (|| {
             if let Some(context) = context {
                 context.cleanup()?;
@@ -189,12 +201,13 @@ impl BeatModel {
             }),
             Err(primary) => {
                 if profile.is_some() {
-                    completion(
-                        session
-                            .end_profiling()
-                            .map(|_| ())
-                            .map_err(|e| format!("profile.finish: {e}")),
-                    );
+                    let completed = session
+                        .end_profiling()
+                        .map(|_| ())
+                        .map_err(|e| format!("profile.finish: {e}"));
+                    if let Some(context) = context {
+                        context.record(completed);
+                    }
                 }
                 Err(primary)
             }

@@ -53,8 +53,8 @@ Public source prerequisites:
 - Rubber Band with the **LiveShifter C API**, such as version 4.0.0. Build metadata
   and runtime DLL/library discovery must be configured; see the
   [native dependency instructions](docs/development.md#native-dependencies).
-- The separately locked Python 3.12 BeatThis worker for automatic BPM; the setup
-  command below provisions it.
+- The native BeatThis ONNX worker for automatic BPM on Windows x64. The setup
+  command below builds it and provisions its pinned runtime.
 - FFmpeg and separator model assets for optional stem generation.
 
 On Windows, after configuring those prerequisites:
@@ -72,8 +72,9 @@ synchronize dependencies. Close Looper before building another Native profile.
 For editable source setup, Linux dependency discovery and individual checks, use
 [Development](docs/development.md#setup).
 
-The runtime setup command verifies the required analysis worker without opening
-the app, an audio device or model inference. Add `--with-stems` to acquire and
+The runtime setup command prepares the analysis worker and warms the CUDA kernel
+cache on a usable NVIDIA device without opening the app or an audio device.
+Add `--with-stems` to acquire and
 CPU-load both optional separator models; install FFmpeg as described in
 [stem setup](docs/model-worker-setup.md#optional-stem-models-and-codecs). Re-run setup to repair, or use
 `--check` for non-acquiring verification. Public source defaults use ignored

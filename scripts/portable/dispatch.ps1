@@ -43,9 +43,9 @@ try {
         $runtime = Join-Path (Join-Path $Root 'versions') $directory
         $arguments = @('-Root',$Root,'-VersionDirectory',$directory)
     } elseif ($candidate) {
-        if (-not $Check) { throw 'This candidate provides a build preflight. Run START-LOOPER.bat --check.' }
+        if (-not $Check) { throw 'This candidate provides a runtime preflight. Run START-LOOPER.bat --check.' }
         $runtime = Join-Path $Root 'Runtime'
-        $arguments = @('-Root',$Root,'-InstallerOwned','-BuildRuntimeCheck')
+        $arguments = @('-Root',$Root,'-InstallerOwned')
     } elseif ($pointer.schema_version -eq 2 -and $pointer.source_kind -eq 'main') {
         $runtime = Join-Path $Root 'Runtime'
         $arguments = @('-Root',$Root,'-StartLockHeld')

@@ -1,6 +1,6 @@
 //! Offline complete-source diagnostic CLI, never an application execution receipt.
 use flitzis_looper_analysis::{
-    beat_audio::{self, MAX_AUDIO_BYTES, Soxr, validate_audio_shape},
+    beat_audio::{self, Soxr, validate_audio_shape},
     beat_inference::{BeatModel, MAX_GRAPH_BYTES, Provider, validate_graph_checked},
     trial_lifetime::{CANCELLED, retain_first},
 };
@@ -53,7 +53,7 @@ fn execute(
     }
     let rate: u32 = a[offset + 3].parse().map_err(|_| "invalid sample rate")?;
     let (raw, source_digest) =
-        own.read_checked(Path::new(&a[offset + 2]), MAX_AUDIO_BYTES, |bytes| {
+        own.read_checked(Path::new(&a[offset + 2]), isize::MAX as usize, |bytes| {
             if bytes == 0 || bytes % 4 != 0 {
                 return Err("invalid complete float32 PCM byte extent".into());
             }

@@ -5,7 +5,9 @@ PCM file. This bridge creates no job, polling thread, installation or PCM owner.
 """
 
 import json
+import platform
 import re
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event, current_thread, main_thread
@@ -52,6 +54,18 @@ MAX_NEURAL_WORKER_BYTES = 16 * 1024 * 1024
 _IDENTITY = TypeAdapter(AnalysisIdentity)
 _POLL_SECONDS = 0.02
 _ARRAY_NAMES = ("beat_seconds", "downbeat_seconds", "beat_logits", "downbeat_logits")
+
+
+def _production_windows() -> bool:
+    return sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}
+
+
+def _app_configuration(
+    installed: Path, scratch: Path
+) -> NativeWorkerConfiguration | WorkerConfiguration:
+    if _production_windows():
+        return load_worker_configuration(installed, scratch, native_only=True)
+    return load_worker_configuration(installed, scratch)
 
 
 class NativeCancellationProbe(Protocol):
@@ -329,9 +343,9 @@ def run_beat_this(
     if cancel.is_set():
         return _envelope(identity, input_metadata, None, "cancelled", "cancelled")
     try:
-        # Existing configuration verification is synchronous and local. Original
-        # Native admission remains held until it returns; no setup is called.
-        configuration = load_worker_configuration(installed, pcm.path.parent)
+        # Keep the historical bridge available for reference tools. On Windows x64
+        # the application requires the installed production ONNX package.
+        configuration = _app_configuration(installed, pcm.path.parent)
     except (OSError, ValueError) as error:
         status: ComponentStatus = "cancelled" if cancel.is_set() else "unavailable"
         reason = (

@@ -1359,7 +1359,8 @@ impl ColdLoad {
 
     fn analyze_prepared(
         &self,
-        sample: &SampleBuffer,
+        installation: &str,
+        sample: &super::analysis_pcm::CompletePcm<'_>,
         descriptor: &serde_json::Value,
         held: usize,
     ) -> Result<crate::messages::LoadedAnalysis, String> {
@@ -1372,7 +1373,7 @@ impl ColdLoad {
         {
             return Err("tempo refinement superseded by non-Legacy timing".into());
         }
-        let context = self.analysis_installation.as_ref().map(|installation| {
+        let context = {
             let shutdown = self.cancelled.clone();
             let requests = self.requests.clone();
             let epoch = self.epoch.clone();
@@ -1382,7 +1383,7 @@ impl ColdLoad {
             let request = self.base_request;
             let expected_epoch = self.base_epoch;
             super::app_analysis::NeuralContext {
-                installation: installation.clone(),
+                installation: installation.to_owned(),
                 staging_root: self.samples_root.clone(),
                 descriptor: descriptor.clone(),
                 additional_held_bytes: held,
@@ -1405,25 +1406,24 @@ impl ColdLoad {
                         )
                 }),
             }
-        });
-        if self.refine_tempo_only && context.is_none() {
+        };
+        super::app_analysis::analyze_neural(
+            sample,
+            self.output_rate,
+            context,
+            self.refine_tempo_only,
+            self.automatic_bpm_range,
+        )
+    }
+
+    fn analyze_scientific(
+        &self,
+        sample: &SampleBuffer,
+    ) -> Result<crate::messages::LoadedAnalysis, String> {
+        if self.refine_tempo_only {
             return Err("primary neural analysis is not configured".into());
         }
-        match self.automatic_bpm_range {
-            Some(range) => super::app_analysis::analyze_with_range(
-                sample,
-                self.output_rate,
-                context,
-                self.refine_tempo_only,
-                Some(range),
-            ),
-            None => super::app_analysis::analyze(
-                sample,
-                self.output_rate,
-                context,
-                self.refine_tempo_only,
-            ),
-        }
+        super::app_analysis::analyze_scientific(sample, self.output_rate, self.automatic_bpm_range)
     }
 
     fn prepare(&self) -> Result<PreparedColdSample, String> {
@@ -1469,24 +1469,28 @@ impl ColdLoad {
                     let finite = sample.resident_start() != 0
                         || sample.resident_end() != sample.frame_count();
                     let held = if finite { sample.samples.len() * 4 } else { 0 };
-                    let read = || {
-                        lease
-                            .read_complete_cancellable(
-                                &sample,
-                                super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
-                                &cancelled,
-                            )
-                            .map_err(|e| e.to_string())
-                    };
-                    let complete = if self.analysis_installation.is_some() {
-                        super::app_analysis::prepare_input(
+                    if let Some(installation) = &self.analysis_installation {
+                        super::app_analysis::admission_peak(
                             sample.frame_count(),
                             sample.channels,
                             self.output_rate,
                             held,
                             self.refine_tempo_only,
-                            read,
-                        )?
+                        )?;
+                        let complete = if finite {
+                            lease
+                                .read_complete_analysis_pcm(&sample, &cancelled)
+                                .map_err(|error| error.to_string())?
+                        } else {
+                            super::analysis_pcm::CompletePcm::borrow(&sample, self.output_rate)
+                                .map_err(|error| error.to_string())?
+                        };
+                        self.analyze_prepared(
+                            installation,
+                            &complete,
+                            &lease.manifest.descriptor["decoder"],
+                            held,
+                        )
                     } else {
                         super::analysis_pcm::default_analysis_peak(
                             sample.frame_count(),
@@ -1496,9 +1500,15 @@ impl ColdLoad {
                             super::constant_timing::MAX_PCM_BYTES,
                         )
                         .map_err(|e| e.to_string())?;
-                        read()?
-                    };
-                    self.analyze_prepared(&complete, &lease.manifest.descriptor["decoder"], held)
+                        let complete = lease
+                            .read_complete_cancellable(
+                                &sample,
+                                super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
+                                &cancelled,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        self.analyze_scientific(&complete)
+                    }
                 })();
                 if cancelled() {
                     return Err("material analysis superseded".into());
@@ -1585,9 +1595,8 @@ impl ColdLoad {
             super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate)
         };
         let (analysis, analysis_error) = if self.run_analysis || self.refine_tempo_only {
-            // Automatic analysis is still requested. Its existing complete-input
-            // kernels have a separate genuine RAM budget; they cannot force a
-            // selected loop to own complete source PCM or veto durable import.
+            // Analysis owns any extra complete-source PCM only until it settles.
+            // Playback selection and durable import retain their separate admission.
             let analysis_result = (|| -> Result<crate::messages::LoadedAnalysis, String> {
                 let finite =
                     sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
@@ -1600,7 +1609,38 @@ impl ColdLoad {
                 } else {
                     0
                 };
-                if self.analysis_installation.is_none() {
+                if let Some(installation) = &self.analysis_installation {
+                    super::app_analysis::admission_peak(
+                        sample.frame_count(),
+                        sample.channels,
+                        self.output_rate,
+                        held,
+                        self.refine_tempo_only,
+                    )?;
+                    if cancelled() {
+                        return Err("cold load cancelled".into());
+                    }
+                    progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+                    let complete = if finite {
+                        transaction
+                            .read_prepared_analysis_pcm(&cancelled)
+                            .map_err(|error| {
+                                format!("automatic analysis PCM preparation failed: {error}")
+                            })?
+                    } else {
+                        super::analysis_pcm::CompletePcm::borrow(&sample, self.output_rate)
+                            .map_err(|error| error.to_string())?
+                    };
+                    self.analyze_prepared(
+                        installation,
+                        &complete,
+                        &transaction
+                            .manifest()
+                            .map_err(|error| error.to_string())?
+                            .descriptor["decoder"],
+                        held,
+                    )
+                } else {
                     super::analysis_pcm::default_analysis_peak(
                         sample.frame_count(),
                         sample.channels,
@@ -1611,13 +1651,11 @@ impl ColdLoad {
                     .map_err(|error| {
                         format!("automatic analysis exceeds its PCM preparation budget: {error}")
                     })?;
-                }
-                if cancelled() {
-                    return Err("cold load cancelled".into());
-                }
-                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-                let mut read = || {
-                    if finite {
+                    if cancelled() {
+                        return Err("cold load cancelled".into());
+                    }
+                    progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+                    let complete = if finite {
                         transaction
                             .read_prepared_selection(
                                 None,
@@ -1626,31 +1664,12 @@ impl ColdLoad {
                             )
                             .map_err(|error| {
                                 format!("automatic analysis PCM preparation failed: {error}")
-                            })
+                            })?
                     } else {
-                        Ok(sample.clone())
-                    }
-                };
-                let complete = if self.analysis_installation.is_some() {
-                    super::app_analysis::prepare_input(
-                        sample.frame_count(),
-                        sample.channels,
-                        self.output_rate,
-                        held,
-                        self.refine_tempo_only,
-                        read,
-                    )?
-                } else {
-                    read()?
-                };
-                self.analyze_prepared(
-                    &complete,
-                    &transaction
-                        .manifest()
-                        .map_err(|e| e.to_string())?
-                        .descriptor["decoder"],
-                    held,
-                )
+                        sample.clone()
+                    };
+                    self.analyze_scientific(&complete)
+                }
             })();
             // Cancel/stale source can never become a successful load carrying an
             // incidental analysis warning. It still rolls back the transaction.
@@ -1734,10 +1753,34 @@ impl ColdLoad {
             .as_u64()
             .ok_or("missing prepared source rate")?
             != u64::from(self.output_rate);
-        // This separate bounded complete-input analysis is retired before any
+        // This separate complete-input analysis is retired before any
         // selected live allocation. An analysis failure cannot invent an end.
         let analysis_result = (|| -> Result<crate::messages::LoadedAnalysis, String> {
-            if self.analysis_installation.is_none() {
+            if let Some(installation) = &self.analysis_installation {
+                super::app_analysis::admission_peak(
+                    source.frame_count,
+                    source.channels,
+                    self.output_rate,
+                    0,
+                    false,
+                )?;
+                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+                let complete =
+                    transaction
+                        .read_prepared_analysis_pcm(&cancelled)
+                        .map_err(|error| {
+                            format!("automatic analysis PCM preparation failed: {error}")
+                        })?;
+                self.analyze_prepared(
+                    installation,
+                    &complete,
+                    &transaction
+                        .manifest()
+                        .map_err(|error| error.to_string())?
+                        .descriptor["decoder"],
+                    0,
+                )
+            } else {
                 super::analysis_pcm::default_analysis_peak(
                     source.frame_count,
                     source.channels,
@@ -1748,37 +1791,18 @@ impl ColdLoad {
                 .map_err(|error| {
                     format!("automatic analysis exceeds its PCM preparation budget: {error}")
                 })?;
-            }
-            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-            let mut read = || {
-                transaction
+                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+                let complete = transaction
                     .read_prepared_selection(
                         None,
                         super::constant_timing::MAX_PCM_BYTES,
                         &cancelled,
                     )
-                    .map_err(|error| format!("automatic analysis PCM preparation failed: {error}"))
-            };
-            let complete = if self.analysis_installation.is_some() {
-                super::app_analysis::prepare_input(
-                    source.frame_count,
-                    source.channels,
-                    self.output_rate,
-                    0,
-                    false,
-                    read,
-                )?
-            } else {
-                read()?
-            };
-            self.analyze_prepared(
-                &complete,
-                &transaction
-                    .manifest()
-                    .map_err(|e| e.to_string())?
-                    .descriptor["decoder"],
-                0,
-            )
+                    .map_err(|error| {
+                        format!("automatic analysis PCM preparation failed: {error}")
+                    })?;
+                self.analyze_scientific(&complete)
+            }
         })();
         if cancelled() {
             return Err("cold load cancelled".into());

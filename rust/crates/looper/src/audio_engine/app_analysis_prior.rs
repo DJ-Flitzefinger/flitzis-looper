@@ -1105,7 +1105,7 @@ pub(super) fn attempt(
         &cancelled,
         |work_core, primary| {
             qm_corroboration::observation(
-                sample,
+                &super::CompletePcm::borrow(sample, rate).map_err(unavailable)?,
                 rate,
                 context,
                 nn_mono,
@@ -1179,7 +1179,7 @@ pub(super) fn cached_component(
         &|| false,
         |work_core, primary| {
             qm_corroboration::observation(
-                sample,
+                &super::CompletePcm::borrow(sample, rate).map_err(unavailable)?,
                 rate,
                 context,
                 nn_mono,

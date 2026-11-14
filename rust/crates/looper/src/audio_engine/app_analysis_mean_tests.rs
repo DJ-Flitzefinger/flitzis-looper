@@ -67,12 +67,12 @@ fn independent_precise_qm_precedes_mean_and_final_range_never_selects_mean_inste
 }
 
 #[test]
-fn precise_observation_near_limit_refuses_before_envelope_mutation() {
+fn precise_observation_extent_overflow_refuses_before_envelope_mutation() {
     let mut tree = base();
     let original_tree = tree.clone();
     let original = tree.to_string();
     let exact = original.as_bytes().to_vec();
-    let base_core = LIMIT - SMALL - 16 * 1024;
+    let base_core = usize::MAX - SMALL - 16 * 1024;
     assert!(admit(&[base_core, SMALL]).is_ok());
     let calls = std::cell::Cell::new(0);
     let result = attempt(
@@ -89,8 +89,8 @@ fn precise_observation_near_limit_refuses_before_envelope_mutation() {
         |_| {
             calls.set(calls.get() + 1);
             let mut observed = precise(120.0);
-            // Actual heap is small; the held-source floor models the near-limit
-            // parent without allocating hundreds of MiB in this regression.
+            // The accounted live extent simulates an arithmetic overflow without
+            // allocating the source represented by it.
             observed.source = json!({"retained": "s".repeat(32 * 1024)});
             observed.qm["retained"] = json!("q".repeat(32 * 1024));
             Ok(observed)
@@ -167,7 +167,7 @@ fn late_failure_and_cancel_never_commit_a_new_bpm_method_tuple() {
             120.0,
             "mean_estimate",
             &original,
-            LIMIT - 1,
+            usize::MAX,
             0,
             0,
             &|| false

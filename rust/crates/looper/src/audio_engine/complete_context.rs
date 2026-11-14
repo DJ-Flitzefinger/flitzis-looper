@@ -597,60 +597,73 @@ fn start_analysis_with(
                 }));
 
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    reader
-                        .materialize(super::constant_timing::MAX_PCM_BYTES, &cancelled)
-                        .and_then(|sample| {
-                            if cancelled() {
-                                return Err("Analysis superseded by another pad request".into());
-                            }
-                            let context = if let Some(installation) = installation {
-                                let generation = reader
-                                    .guard
-                                    .as_ref()
-                                    .ok_or("analysis source generation unavailable")?
-                                    .generation;
-                                let (descriptor, _) =
-                                    reader.raw_source_descriptor(generation, &cancelled)?;
-                                let (root, _) = reader.analysis_artifact_paths()?;
-                                let source_id = descriptor["original"]["sha256"]
-                                    .as_str()
-                                    .ok_or("analysis original digest missing")?
-                                    .to_owned();
-                                let owner = owner.clone();
-                                let shutdown = shutdown.clone();
-                                Some(super::app_analysis::NeuralContext {
-                                    installation,
-                                    staging_root: root.to_owned(),
-                                    descriptor,
-                                    identity: super::analysis_pcm::PcmIdentity {
-                                        pad_id: id,
-                                        request_id,
-                                        source_id,
-                                        source_generation: generation,
-                                    },
-                                    cancelled: Arc::new(move || {
-                                        shutdown.load(Ordering::Acquire) || !owner.current()
-                                    }),
-                                    additional_held_bytes: if reader.reference.resident_start() == 0
-                                        && reader.reference.resident_end()
-                                            == reader.reference.frame_count()
-                                    {
-                                        0
-                                    } else {
-                                        reader.reference.samples.len() * 4
-                                    },
-                                })
-                            } else {
-                                None
-                            };
-                            super::app_analysis::analyze_with_range(
-                                &sample,
-                                output_sample_rate,
-                                context,
-                                false,
-                                automatic_bpm_range,
-                            )
-                        })
+                    if let Some(installation) = installation {
+                        let reference = &reader.reference;
+                        let finite = reference.resident_start() != 0
+                            || reference.resident_end() != reference.frame_count();
+                        let held = if finite { reader.held_bytes()? } else { 0 };
+                        let sample = if finite {
+                            reader
+                                .lease
+                                .as_ref()
+                                .ok_or("complete source lease unavailable")?
+                                .read_complete_analysis_pcm(reference, &cancelled)
+                                .map_err(|error| error.to_string())?
+                        } else {
+                            super::analysis_pcm::CompletePcm::borrow(reference, output_sample_rate)
+                                .map_err(|error| error.to_string())?
+                        };
+                        if cancelled() {
+                            return Err("Analysis superseded by another pad request".into());
+                        }
+                        let generation = reader
+                            .guard
+                            .as_ref()
+                            .ok_or("analysis source generation unavailable")?
+                            .generation;
+                        let (descriptor, _) =
+                            reader.raw_source_descriptor(generation, &cancelled)?;
+                        let (root, _) = reader.analysis_artifact_paths()?;
+                        let source_id = descriptor["original"]["sha256"]
+                            .as_str()
+                            .ok_or("analysis original digest missing")?
+                            .to_owned();
+                        let owner = owner.clone();
+                        let shutdown = shutdown.clone();
+                        let context = super::app_analysis::NeuralContext {
+                            installation,
+                            staging_root: root.to_owned(),
+                            descriptor,
+                            identity: super::analysis_pcm::PcmIdentity {
+                                pad_id: id,
+                                request_id,
+                                source_id,
+                                source_generation: generation,
+                            },
+                            cancelled: Arc::new(move || {
+                                shutdown.load(Ordering::Acquire) || !owner.current()
+                            }),
+                            additional_held_bytes: held,
+                        };
+                        super::app_analysis::analyze_neural(
+                            &sample,
+                            output_sample_rate,
+                            context,
+                            false,
+                            automatic_bpm_range,
+                        )
+                    } else {
+                        let sample = reader
+                            .materialize(super::constant_timing::MAX_PCM_BYTES, &cancelled)?;
+                        if cancelled() {
+                            return Err("Analysis superseded by another pad request".into());
+                        }
+                        super::app_analysis::analyze_scientific(
+                            &sample,
+                            output_sample_rate,
+                            automatic_bpm_range,
+                        )
+                    }
                 }))
                 .unwrap_or_else(|_| Err("Analysis worker failed".into()));
                 let analysis = match result {

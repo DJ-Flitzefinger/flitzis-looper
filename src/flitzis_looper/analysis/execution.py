@@ -93,7 +93,45 @@ NATIVE_CUDA_PACKAGE_SHA: Final = "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84
 NATIVE_CPU_PACKAGE_SHA: Final = "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319"
 type NativeCudaPolicy = Literal["cuda", "auto"]
 type NativeCudaError = Literal[2, 214, 700, 702, 719]
+type NativeCudaStartupReason = Literal["cuda_unavailable", "cuda_startup_error"]
 type DeviceName = Annotated[str, Field(strict=True, min_length=1, max_length=256)]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCudaStartupError(_StrictDto):
+    """A qualified driver or provider failure before CUDA inference."""
+
+    stage: Literal[
+        "driver_load",
+        "driver_symbol",
+        "driver_init",
+        "driver_device",
+        "provider_registration",
+        "session_initialization",
+    ]
+    code: Annotated[int, Field(strict=True)] | None
+
+    def fallback_reason(self) -> NativeCudaStartupReason | None:
+        """Classify the finite startup evidence also admitted by the Native App."""
+        match self.stage, self.code:
+            case (
+                ("driver_load", 126)
+                | ("driver_init", 100)
+                | ("driver_device" | "session_initialization", 100 | 101)
+                | ("provider_registration", None)
+            ):
+                return "cuda_unavailable"
+            case (
+                ("driver_load" | "driver_symbol", 127)
+                | ("driver_init" | "driver_device", 3 | 46 | 802 | 803 | 804)
+                | (
+                    "session_initialization",
+                    2 | 3 | 35 | 46 | 214 | 700 | 702 | 719 | 802 | 803 | 804,
+                )
+            ):
+                return "cuda_startup_error"
+            case _:
+                return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +159,14 @@ class NativeCudaExecutionReceipt(_StrictDto):
         "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b",
         "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319",
     ]
-    cuda: NativeCudaRuntime
+    cuda: NativeCudaRuntime | None
     cuda_kernel_events: Annotated[int, Field(strict=True, gt=0, le=100_000)] | None
-    fallback_reason: Literal["cuda_device_error"] | None
+    fallback_reason: (
+        Literal["cuda_device_error", "cuda_cache_unavailable"] | NativeCudaStartupReason | None
+    )
     cuda_error: NativeCudaError | None
+    cuda_startup_error: NativeCudaStartupError | None = None
+    cuda_cache_error: Annotated[str, Field(strict=True, min_length=1, max_length=512)] | None = None
 
 
 type ActualExecutionReceipt = (
@@ -196,24 +238,48 @@ def validate_execution(
 
 
 def _native_cuda_execution_valid(receipt: NativeCudaExecutionReceipt) -> bool:
-    name = receipt.cuda.device_name
-    if not name.strip() or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in name):
+    name = receipt.cuda.device_name if receipt.cuda is not None else None
+    if name is not None and (
+        not name.strip() or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in name)
+    ):
         return False
     if receipt.device == "cuda:0":
         return (
-            receipt.device_name == name
+            name is not None
+            and receipt.device_name == name
             and receipt.ort_package_sha256 == NATIVE_CUDA_PACKAGE_SHA
             and receipt.cuda_kernel_events is not None
             and receipt.fallback_reason is None
             and receipt.cuda_error is None
+            and receipt.cuda_startup_error is None
+            and receipt.cuda_cache_error is None
         )
-    return (
+    if not (
         receipt.requested_policy == "auto"
         and receipt.device_name is None
         and receipt.ort_package_sha256 == NATIVE_CPU_PACKAGE_SHA
         and receipt.cuda_kernel_events is None
-        and receipt.fallback_reason == "cuda_device_error"
-        and receipt.cuda_error is not None
+    ):
+        return False
+    if receipt.cuda_cache_error is not None:
+        return (
+            name is None
+            and receipt.cuda_error is None
+            and receipt.cuda_startup_error is None
+            and receipt.fallback_reason == "cuda_cache_unavailable"
+        )
+    if receipt.cuda_startup_error is None:
+        return (
+            name is not None
+            and receipt.fallback_reason == "cuda_device_error"
+            and receipt.cuda_error is not None
+        )
+    reason = receipt.cuda_startup_error.fallback_reason()
+    return (
+        name is None
+        and receipt.cuda_error is None
+        and reason is not None
+        and receipt.fallback_reason == reason
     )
 
 
@@ -299,6 +365,11 @@ def device_label(receipt: ActualExecutionReceipt | None) -> str:
     if receipt is None:
         return "Device unknown"
     if receipt.device == "cpu":
+        if (
+            isinstance(receipt, NativeCudaExecutionReceipt)
+            and receipt.fallback_reason == "cuda_unavailable"
+        ):
+            return "CPU (CUDA unavailable)"
         return "CPU (CUDA fallback)" if receipt.fallback_reason is not None else "CPU"
     return f"CUDA 0 · {receipt.device_name}"
 

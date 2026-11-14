@@ -16,14 +16,7 @@ fn unavailable(reason: impl std::fmt::Display) -> Failure {
     Failure::Unavailable(reason.to_string().chars().take(240).collect())
 }
 fn admit(parts: &[usize]) -> Result<usize, Failure> {
-    let total = budget::sum(parts).map_err(unavailable)?;
-    if total > LIMIT {
-        Err(unavailable(
-            "tempo fallback exceeds 512 MiB preparation budget",
-        ))
-    } else {
-        Ok(total)
-    }
+    budget::sum(parts).map_err(unavailable)
 }
 fn local_failure(error: app_tempo::mean::Failure) -> Failure {
     match error {
@@ -48,6 +41,7 @@ pub(super) fn attempt(
     check(cancelled)?;
     // This completed independent precise attempt precedes every mean decision.
     // Its existing owner verifies full PCM/NN mono/source identity and retires DSP.
+    let _header = reserve_workspace(SMALL).map_err(unavailable)?;
     let observed = observe(admit(&[base_core, SMALL])?)?;
     check(cancelled)?;
     let CompletedObservation {
@@ -80,9 +74,9 @@ pub(super) fn attempt(
             .retained_bytes()
             .ok_or_else(|| unavailable("QM mean extent overflow"))?;
         let retained = observed_core;
-        let available = LIMIT
-            .checked_sub(retained)
-            .ok_or_else(|| unavailable("mean workspace unavailable"))?;
+        let available = app_tempo::mean::preparation_bytes(neural_beats.len())
+            .ok_or_else(|| unavailable("mean workspace extent overflow"))?;
+        let _mean = reserve_workspace(available).map_err(unavailable)?;
         let Some(neural_mean) =
             app_tempo::mean::interior(neural_beats, duration, available, cancelled)
                 .map_err(local_failure)?
@@ -107,6 +101,7 @@ pub(super) fn attempt(
             .and_then(|n| n.checked_add(SMALL))
             .ok_or_else(|| unavailable("mean JSON extent overflow"))?;
         admit(&[retained, local_bytes, json_reserve])?;
+        let _json = reserve_workspace(json_reserve).map_err(unavailable)?;
         let block = json!({"window_seconds":[duration/5.0,4.0*duration/5.0],
             "neural_regions":neural_mean.regions,"qm_regions":qm_mean.regions,
             "neural_mean_bpm":bpm,"qm_mean_bpm":qm_mean.bpm,"qm_bpm_factor":factor,
@@ -203,6 +198,7 @@ fn complete(
         grid_bytes,
         size_of::<LoadedAnalysis>(),
     ])?;
+    let _serialization = reserve_workspace(strings).map_err(unavailable)?;
     check(cancelled)?;
     let method_json = serde_json::to_string(tree).map_err(unavailable)?;
     admit(&[

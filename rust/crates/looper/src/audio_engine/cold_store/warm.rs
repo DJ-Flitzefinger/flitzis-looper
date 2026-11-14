@@ -741,6 +741,62 @@ pub(super) fn read_playback_range(
     });
     let target =
         Arc::get_mut(&mut data).ok_or_else(|| invalid("range allocation unexpectedly shared"))?;
+    read_playback_samples(reader, length, cancelled, metrics, true, |index, value| {
+        target[index].write(value);
+    })?;
+    #[cfg(test)]
+    super::super::c3_observation::owned_pcm(length);
+    // SAFETY: each of exactly `count` elements was initialized once by the
+    // validated reader. The allocation has remained unique.
+    Ok(unsafe { data.assume_init() })
+}
+
+/// Unpublished complete analysis PCM. Only new bytes are promised against
+/// observed headroom while allocation and initialization are in progress.
+pub(super) fn read_analysis_pcm(
+    reader: &mut File,
+    frames: usize,
+    channels: usize,
+    cancelled: &dyn Fn() -> bool,
+    metrics: &mut IntegrityMetrics,
+) -> io::Result<Vec<f32>> {
+    check_cancelled(&cancelled)?;
+    let count = frames
+        .checked_mul(channels)
+        .filter(|&n| n != 0 && (1..=32).contains(&channels))
+        .ok_or_else(|| invalid("analysis PCM geometry"))?;
+    let length = count
+        .checked_mul(4)
+        .ok_or_else(|| invalid("analysis PCM extent overflow"))?;
+    if u64::try_from(length).ok() != Some(reader.metadata()?.len()) {
+        return Err(invalid("analysis PCM differs from complete file extent"));
+    }
+    let peak = length
+        .checked_add(CHUNK_BYTES)
+        .ok_or_else(|| invalid("analysis PCM workspace overflow"))?;
+    let mut reservation =
+        crate::audio_engine::resident_host_memory::HostReservation::reserve_conversion(peak)
+            .map_err(io::Error::other)?;
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(count)
+        .map_err(|_| io::Error::other("analysis PCM allocation unavailable"))?;
+    reader.seek(SeekFrom::Start(0))?;
+    read_playback_samples(reader, length, &cancelled, metrics, false, |_, value| {
+        samples.push(value)
+    })?;
+    reservation.commit(length).map_err(io::Error::other)?;
+    Ok(samples)
+}
+
+fn read_playback_samples(
+    reader: &mut File,
+    length: usize,
+    cancelled: &impl Fn() -> bool,
+    metrics: &mut IntegrityMetrics,
+    _observe_resident_window: bool,
+    mut write_sample: impl FnMut(usize, f32),
+) -> io::Result<()> {
     let mut bytes = [0_u8; CHUNK_BYTES];
     let mut left = length;
     let mut initialized = 0;
@@ -749,34 +805,34 @@ pub(super) fn read_playback_range(
         let length = left.min(CHUNK_BYTES);
         reader.read_exact(&mut bytes[..length])?;
         #[cfg(test)]
-        super::super::native_owned_work::observe_preparation(
-            super::super::native_owned_work::WorkPoint::WindowSourceChunk,
-        );
+        if _observe_resident_window {
+            super::super::native_owned_work::observe_preparation(
+                super::super::native_owned_work::WorkPoint::WindowSourceChunk,
+            );
+        }
         metrics.playback_read_bytes = metrics.playback_read_bytes.saturating_add(length as u64);
         #[cfg(test)]
-        WINDOW_READ_OBSERVATION.with(|observation| {
-            let mut value = observation.get();
-            value.read_bytes = value.read_bytes.saturating_add(length as u64);
-            observation.set(value);
-        });
+        if _observe_resident_window {
+            WINDOW_READ_OBSERVATION.with(|observation| {
+                let mut value = observation.get();
+                value.read_bytes = value.read_bytes.saturating_add(length as u64);
+                observation.set(value);
+            });
+        }
         check_cancelled(cancelled)?;
         for sample in bytes[..length].chunks_exact(4) {
             let value = f32::from_le_bytes(sample.try_into().expect("f32 bytes"));
             if !value.is_finite() {
                 return Err(invalid("nonfinite resident PCM range"));
             }
-            target[initialized].write(value);
+            write_sample(initialized, value);
             initialized += 1;
         }
         left -= length;
     }
     check_cancelled(cancelled)?;
-    if initialized != count {
+    if initialized != length / 4 {
         return Err(invalid("resident range initialization mismatch"));
     }
-    #[cfg(test)]
-    super::super::c3_observation::owned_pcm(length);
-    // SAFETY: each of exactly `count` elements was initialized once above with
-    // a finite f32. No shared Arc or result escaped before the final count check.
-    Ok(unsafe { data.assume_init() })
+    Ok(())
 }

@@ -9,6 +9,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
@@ -29,6 +30,22 @@ from flitzis_looper.analysis.worker import WorkerConfiguration
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.contracts import BeatWorkerRequest
+
+
+@pytest.fixture(autouse=True)
+def reference_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bridge, "_production_windows", lambda: False)
+
+
+def test_windows_bridge_requires_native_installation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bridge, "_production_windows", lambda: True)
+    load = Mock(side_effect=ValueError("BeatThis requires the ONNX worker"))
+    monkeypatch.setattr(bridge, "load_worker_configuration", load)
+    with pytest.raises(ValueError, match="requires the ONNX worker"):
+        bridge._app_configuration(tmp_path / "models", tmp_path)
+    load.assert_called_once_with(tmp_path / "models", tmp_path, native_only=True)
 
 
 class _Probe:

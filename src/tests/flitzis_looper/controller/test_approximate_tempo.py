@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from flitzis_looper.analysis.app_tempo_approximate import from_saved
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
+from flitzis_looper.analysis.artifacts import NATIVE_MODEL
 from flitzis_looper.controller import loader as loader_module
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
@@ -59,6 +60,54 @@ def test_scalar_refusal_round_trip_copy_warning_and_no_phase(controller: AppCont
     assert "may be inaccurate" in sidebar_left.bpm_estimate_guidance(method)
     controller.project.manual_bpm[0] = 60.0
     assert ctx.state.pads.bpm_drift_warning(0) is None
+
+
+def test_unavailable_native_worker_keeps_replayable_source_energy_and_its_error(
+    controller: AppController,
+) -> None:
+    reason = "CUDAExecutionProvider: worker_crashed (exit 1): resource pressure"
+    novelty = [1.0 if index % 50 == 0 else 0.0 for index in range(1000)]
+    method_data = {
+        "schema_version": 11,
+        "backend": "source_approximate",
+        "policy": "source-approximate-tempo-v11",
+        "status": "approximate_estimate",
+        "bpm": 120.0,
+        "selected": None,
+        "regions": [],
+        "model_sha256": NATIVE_MODEL.sha256,
+        "frontend_id": NATIVE_MODEL.frontend_id,
+        "source_sha256": "a" * 64,
+        "mono_sha256": "b" * 64,
+        "sample_rate_hz": 8000,
+        "frame_count": 80_000,
+        "raw_beats": [],
+        "raw_downbeats": [],
+        "approximate_tempo": {
+            "kind": "source_energy",
+            "original": None,
+            "precise_rejection": reason,
+            "period_seconds": 0.5,
+            "range_constraint": None,
+            "energy_windows": [{"start_frame": 0, "mean_level": 0.02, "novelty": novelty}],
+        },
+    }
+    method = AppTempoMethod.model_validate_json(json.dumps(method_data), strict=True)
+    assert method.execution is None
+    candidate = analysis(method)
+    assert SampleAnalysis.model_validate_json(candidate.model_dump_json()) == candidate
+    event = {"analysis": candidate.model_dump(mode="python"), "analysis_error": reason}
+    controller.loader._store_analysis_completion(
+        0, event["analysis"], key_completed=False, preserve_key=False
+    )
+    controller.loader._record_analysis_errors(0, event)
+    selected = controller.project.sample_analysis[0]
+    assert selected is not None
+    assert selected.bpm == 120.0
+    assert selected.beat_grid == BeatGrid(beats=[], downbeats=[], bars=[])
+    assert controller.session.sample_analysis_errors[0] == reason
+    with pytest.raises(ValidationError, match="provenance"):
+        AppTempoMethod.model_validate(method_data | {"model_sha256": "c" * 64}, strict=True)
 
 
 @pytest.mark.parametrize(

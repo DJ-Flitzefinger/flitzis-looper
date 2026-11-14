@@ -13,7 +13,8 @@ SDK can require elevation or a restart. Rerun the BAT afterward.
   `start-release.bat` aliases use the same private Release runtime. Normal
   start uses the installed runtime with no build or update.
 - `START-LOOPER.bat --check` runs runtime import, DLL, codec and worker checks
-  before App or device acquisition.
+  before App or audio-device acquisition. It reports CUDA cache readiness
+  without running the model.
 - Close the App and rerun the current installer BAT to update or repair.
   The launch and update paths share a lock held for the actual App process
   lifetime. Older active private Python processes also fence updates.
@@ -31,8 +32,8 @@ runtime and does not install GPU or audio-device drivers.
 | Path below `Flitzis-Looper` | Contents |
 | --- | --- |
 | `flitzis-looper/` | Full Git checkout and Native extension. `samples/`, `config/input/` and `record/` hold user data. |
-| `Runtime/` | Private interpreter, packages, DLLs, FFmpeg/FFprobe and launch support. |
-| `analysis-runtime/beat-this/` | Movable pinned worker installation and verified active pointer. |
+| `Runtime/` | Private interpreter, packages, DLLs, FFmpeg/FFprobe, launch support and the Release Beat This executable. |
+| `analysis-runtime/beat-this/` | Pinned ONNX worker assets, verified active pointer and installation-owned CUDA cache. |
 | `models/` | Independent stem model cache. |
 | `tools/`, `cache/`, `b/`, `logs/` | Bootstrap tools, retained downloads and diagnostics, short Native build path, and logs. UI layout is installation-local in `cache/ui/`. |
 
@@ -42,14 +43,31 @@ CPython, Rust, vcpkg, Rubber Band and codecs. The Native build uses the tracked
 access and realtime behavior are described in the
 [audio runtime](architecture/runtime-and-transport.md#output-selection-and-apply).
 
-[`prepare_analysis.py`](../scripts/portable/prepare_analysis.py) selects the
-pinned CPU Beat This worker on fresh install and retains a valid selected
-Torch CUDA profile when updating. The private interpreter and standard library
-move with the worker. Developer Native Beat This trial packages require their
-own explicit setup. [`prepare_models.py`](../scripts/portable/prepare_models.py)
+[`prepare_analysis.py`](../scripts/portable/prepare_analysis.py) stages the
+Release Beat This worker and verifies the selected package. Auto-BPM and Analyze
+use its pinned dynamic FP32 graph and ONNX Runtime 1.24.4. The installer
+provisions CPU on Windows x64 and the pinned CUDA 12.8.1 and cuDNN 9.10.2
+libraries when it detects a usable NVIDIA device. The same graph runs on CPU
+when CUDA is unavailable or a CUDA failure qualifies for a CPU retry.
+[Beat This model and runtime notices](../assets/models/beat-this/README.md)
+describe the pinned sources.
+
+The installer prepares the CUDA disk cache with three synthetic inputs in the
+order 30.25 s, 162 s and 8 s. It reports CUDA readiness only after each worker
+confirms CUDA execution and exits. The cache survives restarts and can be reused
+on unchanged-main repair. The selected GPU, NVIDIA driver release, worker,
+model and package determine which cache is usable. After a driver change or
+cache loss, repair or the App's background analysis path can prepare the new
+cache. If a CPU-only installation later gains a usable NVIDIA device, rerun
+the installer to acquire the CUDA package. If the installer cannot complete
+CUDA preparation for a detected device, it reports the failure and keeps
+the previous installation selected. A system without usable CUDA can install
+the CPU worker.
+
+[`prepare_models.py`](../scripts/portable/prepare_models.py) independently
 verifies the pinned BS-RoFormer and Demucs files and loads each model on CPU in
-its own process before activation. Unchanged-main model repair uses the same
-checks and can reuse a healthy Runtime without rebuilding Native.
+its own process before activation. Unchanged-main worker and model repair
+can reuse a healthy Runtime without rebuilding Native.
 [Worker and asset details](model-worker-setup.md) describe both environments.
 
 Acquisition resumes retained partial downloads and checks full pins before use.
@@ -91,9 +109,12 @@ evidence from import and worker readiness.
 
 The advanced [bundle builder](../scripts/portable/build_bundle.py) packages a
 matching Native wheel and tracked source snapshot from a prepared Windows x64
-CPython 3.14 environment. It accepts `--native-wheel`, `--native-source-commit`,
+CPython 3.14 environment. It builds the matching Beat This executable and
+stages both provider packages for its runtime check. It accepts
+`--native-wheel`, `--native-source-commit`,
 `--ffmpeg-dir`, declared `--dll-dir` and `--license-file NAME=PATH` inputs,
 and `--output` outside the repository. Its output is a separate development
-bundle with no Git checkout metadata and no private project or model files.
+bundle with no Git checkout metadata, private project data, Stem models or
+machine-specific CUDA cache.
 Extract it in an empty directory and use its `START-LOOPER.bat --check`.
 The ordinary BAT remains the source install entry point.

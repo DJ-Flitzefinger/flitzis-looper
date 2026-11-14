@@ -32,11 +32,11 @@ from flitzis_looper.analysis.cuda_artifacts import (
 )
 from flitzis_looper.analysis.execution import (
     CudaBeatModelIdentity,
-    NativeCudaPolicy,
     require_cuda_native_capability,
 )
 from flitzis_looper.analysis.native_beat_worker import (
     NativeWorkerConfiguration,
+    is_production_worker,
     load_native_configuration,
     require_native_worker_capability,
     stage_native_package,
@@ -133,14 +133,17 @@ def stage_native_worker(
     scratch_dir: Path,
     package: Path,
     *,
-    cuda_policy: NativeCudaPolicy | None = None,
+    cuda_policy: Literal["cpu", "cuda", "auto"] | None = None,
+    startup_fault_protocol: Literal[1] | None = None,
 ) -> NativeWorkerConfiguration:
     """Retain a complete local Native worker without changing the active selection."""
     _validate_setup_paths(install_dir, scratch_dir, package)
     install_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".staging-", dir=install_dir) as temporary:
         staging = Path(temporary)
-        stage_native_package(package, staging, cuda_policy=cuda_policy)
+        stage_native_package(
+            package, staging, cuda_policy=cuda_policy, startup_fault_protocol=startup_fault_protocol
+        )
         retained = _retain_installation(staging, install_dir)
     configuration = load_staged_worker_configuration(install_dir, retained, scratch_dir)
     assert isinstance(configuration, NativeWorkerConfiguration)
@@ -229,7 +232,9 @@ def _manifest_bytes(path: Path) -> bytes:
     return raw
 
 
-def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> InstalledWorkerConfiguration:
+def load_worker_configuration(
+    install_dir: Path, scratch_dir: Path, *, native_only: bool = False
+) -> InstalledWorkerConfiguration:
     """Read the explicitly named installed worker without acquisition or subprocess startup."""
     if not install_dir.is_absolute() or not scratch_dir.is_absolute():
         msg = "worker installation and scratch paths must be absolute"
@@ -250,7 +255,13 @@ def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> Installed
         raise ValueError(msg)
     native = load_native_configuration(manifest_path, raw, scratch_dir)
     if native is not None:
+        if native_only and not is_production_worker(native):
+            msg = "Update the BeatThis ONNX worker through the installer or setup-runtime.py."
+            raise ValueError(msg)
         return native
+    if native_only:
+        msg = "BeatThis requires the ONNX worker. Update the installation or run setup-runtime.py."
+        raise ValueError(msg)
     manifest = read_installed_manifest(manifest_path)
     verify_worker_installation(manifest_path, manifest.model, Event())
     return _configuration_for_installation(installed, scratch_dir, manifest)

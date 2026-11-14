@@ -28,12 +28,18 @@ An ordinary source checkout SHALL default downloaded models and its required Bea
 - **AND** setup retains interrupted transfers outside temporary environment staging without an overall download deadline
 
 ### Requirement: Portable Analysis Readiness Is Installation Owned
-The source-main Windows Portable installer SHALL prepare and verify the required BeatThis analysis runtime before declaring a candidate ready. Fresh installations SHALL use the existing pinned CPU profile; updates SHALL retain a valid selected CUDA profile. The worker interpreter, standard library, packages, checkpoint and relative receipts SHALL remain usable after moving the installation without a host virtual environment or developer workspace.
+The source-main Windows Portable installer SHALL prepare and verify the
+required native BeatThis ONNX runtime before declaring a candidate ready.
+Setup SHALL select the pinned graph and CPU runtime and SHALL prepare the
+pinned CUDA runtime and persistent cache when a usable NVIDIA device is
+detected. The executable, packages, graph and relative receipts SHALL remain
+usable after moving the installation.
 
 #### Scenario: A fresh candidate has no analysis worker
 - **GIVEN** a verified current-main candidate and no installed worker
 - **WHEN** the Portable installer prepares its dependencies
-- **THEN** it acquires the pinned private worker resources and verifies their real non-inference environment
+- **THEN** it acquires and verifies the pinned worker resources
+- **AND** it confirms successful synthetic CUDA preparation when the candidate uses CUDA
 - **AND** the final runtime check rejects an absent or invalid worker
 - **AND** candidate and final checks select the explicit installation Root, not the candidate checkout's parent
 

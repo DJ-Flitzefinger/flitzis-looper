@@ -560,8 +560,8 @@ def _validate_harmonics(
 
 def _validate_budget(method: TempoMathView, fit: BudgetOrdinalFit) -> None:
     required = 1024 * len(method.raw_beats) + 512 * len(method.raw_downbeats) + 8 * 1024 * 1024
-    if fit.required_bytes != required or fit.available_bytes > 512 * 1024 * 1024:
-        _invalid("Unavailable ordinal preparation differs from its bounded source reserve")
+    if fit.required_bytes != required:
+        _invalid("Unavailable ordinal preparation differs from its source workspace")
     over_budget = fit.required_bytes > fit.available_bytes
     if (fit.outcome == "budget_unavailable") != over_budget:
         _invalid("Ordinal preparation outcome contradicts its admitted reserve")

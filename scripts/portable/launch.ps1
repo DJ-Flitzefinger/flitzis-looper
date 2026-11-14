@@ -59,37 +59,12 @@ try {
         if (-not $InstallerOwned) { throw 'Worker acquisition is an explicit installer operation.' }
         $analysisRoot = if ($runtimeDrive) { $runtimeDrive.Path } else { $Root }
         $helper = Join-Path $checkout 'scripts/portable/prepare_analysis.py'
-        $baseArguments = @('-s','-B',$helper,'--root',$analysisRoot,'--checkout',$checkout,'--runtime',$runtime)
-        $checkArguments = $baseArguments + @('--mode','check')
-        if ($AnalysisReport) { $checkArguments += @('--report-json',$AnalysisReport) }
-        & (Join-Path $env:PYTHONHOME 'python.exe') @checkArguments
-        if ($LASTEXITCODE -eq 0) { $launchExit = 0 }
-        elseif ($AnalysisMode -eq 'repair') {
-            . (Join-Path $checkout 'scripts/portable/toolchain.ps1')
-            $uv = Get-PortableUv $analysisRoot
-            $env:UV_CACHE_DIR = Join-Path $analysisRoot 'cache/uv'
-            $env:UV_PYTHON_INSTALL_DIR = Join-Path $analysisRoot 'tools/python'
-            $env:UV_TOOL_DIR = Join-Path $analysisRoot 'tools/uv-tools'
-            $env:UV_PYTHON_PREFERENCE = 'only-managed'
-            $env:UV_LINK_MODE = 'copy'
-            $privateMainHome = $env:PYTHONHOME
-            Remove-Item -LiteralPath Env:PYTHONHOME -ErrorAction SilentlyContinue
-            Invoke-Checked $uv @('python','install','3.12.13','--no-bin','--no-registry') | Out-Host
-            $basePython = & $uv python find 3.12.13 --python-preference only-managed
-            if ($LASTEXITCODE -ne 0 -or @($basePython).Count -ne 1) { throw 'Private worker Python could not be resolved.' }
-            $env:PYTHONHOME = $privateMainHome
-            Assert-PlainPath $basePython
-            $metadataOutput = & (Join-Path $env:PYTHONHOME 'python.exe') @baseArguments --mode metadata
-            if ($LASTEXITCODE -ne 0) { throw 'Worker dependency identity is unavailable.' }
-            $metadata = ($metadataOutput -join [Environment]::NewLine) | ConvertFrom-Json
-            if ($metadata.sha256 -notmatch '^[a-f0-9]{64}$' -or $metadata.bytes -le 0) { throw 'Invalid worker checkpoint identity.' }
-            $checkpoint = Join-Path $analysisRoot ("cache/beat-this-" + $metadata.sha256 + '.ckpt')
-            Read-Payload ([Uri]$metadata.url) $checkpoint $metadata.sha256 $metadata.bytes
-            $arguments = $baseArguments + @('--mode','stage','--uv',$uv,'--base-python',$basePython,'--checkpoint',$checkpoint)
-            if ($AnalysisReport) { $arguments += @('--report-json',$AnalysisReport) }
-            & (Join-Path $env:PYTHONHOME 'python.exe') @arguments
-            $launchExit = $LASTEXITCODE
-        } else { $launchExit = $LASTEXITCODE }
+        $mode = if ($AnalysisMode -eq 'repair') { 'stage' } else { 'check' }
+        $arguments = @('-s','-B',$helper,'--root',$analysisRoot,'--checkout',$checkout,
+            '--runtime',$runtime,'--mode',$mode)
+        if ($AnalysisReport) { $arguments += @('--report-json',$AnalysisReport) }
+        & (Join-Path $env:PYTHONHOME 'python.exe') @arguments
+        $launchExit = $LASTEXITCODE
     } elseif ($ModelMode) {
         if ($ModelMode -eq 'repair') {
             $metadataArguments = @('-s','-B',(Join-Path $checkout 'scripts/portable/prepare_models.py'),
@@ -120,7 +95,14 @@ try {
     } else {
         $arguments = @('-s','-B',(Join-Path $runtime 'bootstrap.py'),'--root',$Root,
             '--checkout',$checkout,'--runtime',$runtime)
-        if ($BuildRuntimeCheck) { $arguments += '--check-build-runtime' }
+        if ($BuildRuntimeCheck) {
+            $beatWorker = Join-Path $runtime 'runtime/beat-this/native-beat-this-worker.exe'
+            Assert-PlainPath $beatWorker
+            if (-not (Test-Path -LiteralPath $beatWorker -PathType Leaf)) {
+                throw 'The private Runtime is missing its Release BeatThis worker executable.'
+            }
+            $arguments += '--check-build-runtime'
+        }
         elseif ($Check) { $arguments += '--check-runtime' }
     }
     if (-not $AnalysisMode) {

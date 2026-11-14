@@ -139,6 +139,61 @@ fn modules(context: &Context) -> Result<Vec<Module>, String> {
         .collect()
 }
 
+#[cfg(feature = "native-beat-this-worker")]
+pub(super) fn load_worker_crt(
+    directory: &Path,
+    context: &Context,
+) -> Result<Vec<OwnedLibrary>, String> {
+    const DLLS: [&str; 4] = [
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+    ];
+    let directory = directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    for module in modules(context)? {
+        if module
+            .path()?
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| DLLS.iter().any(|dll| name.eq_ignore_ascii_case(dll)))
+        {
+            return Err("BeatThis worker CRT requires a fresh child with no preloaded CRT".into());
+        }
+    }
+
+    let mut libraries = Vec::with_capacity(DLLS.len());
+    for name in DLLS {
+        context.checkpoint("runtime.crt.load")?;
+        let path = directory
+            .join(name)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if path.parent() != Some(directory.as_path()) {
+            return Err(format!("BeatThis CRT DLL escapes its package: {name}"));
+        }
+        // The caller holds the verified files with read-only sharing. Full
+        // paths and explicit flags keep dependency search out of CWD/PATH.
+        let library = unsafe { WindowsLibrary::load_with_flags(&path, DLL_LOAD_DIR | SYSTEM32) }
+            .map_err(|error| format!("BeatThis CRT load {name}: {error}"))?;
+        let raw = library.into_raw();
+        let library = context.library(unsafe { WindowsLibrary::from_raw(raw) }.into());
+        let module = Module::at(raw as usize, context)?;
+        let observed = module
+            .path()?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if observed != path {
+            return Err(format!("BeatThis CRT mapped a different file: {name}"));
+        }
+        libraries.push(library);
+    }
+    context.cleanup()?;
+    Ok(libraries)
+}
+
 struct Directory(usize, Context);
 impl Directory {
     fn set(path: &Path, context: &Context) -> Result<Self, String> {

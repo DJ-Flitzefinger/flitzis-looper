@@ -61,7 +61,7 @@ fn neural(tree: &Value) -> Option<(&'static str, f64)> {
 }
 
 fn energy(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<(f64, Value)>, Failure> {
@@ -172,12 +172,11 @@ fn energy(
 }
 
 pub(super) fn attempt(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     range: Option<BpmRange>,
     original: &str,
     rejection: &str,
-    retained_bytes: usize,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Choice, Failure> {
     check(cancelled)?;
@@ -186,13 +185,8 @@ pub(super) fn attempt(
         .len()
         .checked_mul(32)
         .and_then(|v| v.checked_add(RESERVE))
-        .and_then(|v| v.checked_add(retained_bytes))
-        .unwrap_or(usize::MAX);
-    if required > LIMIT {
-        return Err(Failure::Unavailable(
-            "approximate tempo preparation budget unavailable".into(),
-        ));
-    }
+        .ok_or_else(|| Failure::Unavailable("approximate preparation extent overflow".into()))?;
+    let _preparation = reserve_workspace(required).map_err(Failure::Unavailable)?;
     let mut tree: Value =
         serde_json::from_str(original).map_err(|e| Failure::Unavailable(e.to_string()))?;
     if tree["bpm"].as_f64().is_some() {
@@ -227,19 +221,13 @@ pub(super) fn attempt(
         "period_seconds":period,"energy_windows":windows,
         "range_constraint":range.map(|r| json!({"minimum_bpm":r.minimum_bpm,"maximum_bpm":r.maximum_bpm}))}));
     check(cancelled)?;
-    let bytes =
-        super::super::neural_analysis::budget::value_tree(&tree).map_err(Failure::Unavailable)?;
     let length = super::super::neural_analysis::budget::serialized_len(&tree)
         .map_err(Failure::Unavailable)?;
-    if retained_bytes
-        .checked_add(bytes)
-        .and_then(|n| n.checked_add(length * 2))
-        .is_none_or(|n| n > LIMIT)
-    {
-        return Err(Failure::Unavailable(
-            "approximate serialization budget unavailable".into(),
-        ));
-    }
+    let _serialization =
+        reserve_workspace(length.checked_mul(2).ok_or_else(|| {
+            Failure::Unavailable("approximate serialization extent overflow".into())
+        })?)
+        .map_err(Failure::Unavailable)?;
     let method_json =
         serde_json::to_string(&tree).map_err(|e| Failure::Unavailable(e.to_string()))?;
     check(cancelled)?;

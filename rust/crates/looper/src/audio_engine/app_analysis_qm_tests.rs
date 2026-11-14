@@ -24,7 +24,7 @@ fn late_joint_refusal_keeps_the_original_float_string_available() {
         120.0,
         "estimated",
         &base,
-        LIMIT - 1,
+        usize::MAX,
         0,
         0,
         &|| false,
@@ -325,9 +325,10 @@ fn cached_component(use_range: bool,use_prior:bool) -> Result<(), Box<dyn std::e
             input["minimum_bpm"].as_f64().ok_or("minimum BPM")?,
             input["maximum_bpm"].as_f64().ok_or("maximum BPM")?)?.unwrap();
         let primary_bpm = tree["bpm"].as_f64().unwrap();
+        let complete = CompletePcm::borrow(&sample, rate)?;
         let selected = super::super::bpm_range::apply(range,primary_bpm,&mut tree,base,
             base_core,source_live,raw_workspace,grid_bytes,&|| false,|work_core| {
-                observation(&sample,rate,&context,&nn_mono,&decoder_identity,work_core,&|| false,
+                observation(&complete,rate,&context,&nn_mono,&decoder_identity,work_core,&|| false,
                     |bpm,extent| super::super::bpm_range::half_double_drift(primary_bpm,bpm,extent))
             })?;
         assert_eq!(primary_bpm,174.0);
@@ -337,7 +338,7 @@ fn cached_component(use_range: bool,use_prior:bool) -> Result<(), Box<dyn std::e
         assert_eq!(tree["bpm_range"]["primary"]["bpm"],primary_bpm);
         Choice { bpm:selected.bpm.unwrap(),method_json:selected.method_json.unwrap() }
     } else { attempt(
-        &sample,
+        &CompletePcm::borrow(&sample,rate)?,
         rate,
         &context,
         &nn_mono,

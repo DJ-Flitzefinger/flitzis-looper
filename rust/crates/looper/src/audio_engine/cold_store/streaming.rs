@@ -271,6 +271,26 @@ impl ColdTransaction {
         Ok(manifest)
     }
 
+    pub(in crate::audio_engine) fn read_prepared_analysis_pcm(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<crate::audio_engine::analysis_pcm::CompletePcm<'static>> {
+        let (channels, frames, _, _) =
+            warm::dimensions(&self.manifest()?.descriptor["playback"]["pcm"], CHUNK_BYTES)?;
+        let mut reader = self.prepared_playback_reader()?;
+        let samples = warm::read_analysis_pcm(
+            &mut reader,
+            frames,
+            channels,
+            cancelled,
+            &mut self.integrity,
+        )?;
+        Ok(crate::audio_engine::analysis_pcm::CompletePcm {
+            samples: std::borrow::Cow::Owned(samples),
+            channels,
+        })
+    }
+
     /// Select actual playback demand only after complete disk integrity is known.
     pub(in crate::audio_engine) fn read_prepared_selection(
         &mut self,

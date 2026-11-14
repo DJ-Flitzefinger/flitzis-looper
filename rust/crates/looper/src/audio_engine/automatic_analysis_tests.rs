@@ -465,7 +465,7 @@ fn import_and_ack_with_backend_mode(
         )
         .unwrap();
         Some(json!({
-            "limit_bytes":512 * 1024 * 1024,
+            "optional_key_limit_bytes":512 * 1024 * 1024,
             "primary_peak_bytes":plan.primary_peak_bytes,
             "optional_key_peak_bytes":plan.key_peak_bytes,
             "key_skip_reason":plan.key_skip_reason,

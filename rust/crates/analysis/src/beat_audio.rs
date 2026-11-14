@@ -1,4 +1,4 @@
-//! Independent offline BeatThis frontend/chunking/minimal postprocessing trial.
+//! Offline BeatThis frontend, chunking and minimal postprocessing.
 //! No application dispatch, realtime work, Python or LibTorch is involved.
 
 use super::beat_inference::{BINS, FRAMES, Logits, checkpoint};
@@ -17,7 +17,6 @@ pub const RATE: u32 = 22050;
 pub const HOP: usize = 441;
 pub const FFT: usize = 1024;
 pub const BORDER: usize = 6;
-pub const MAX_AUDIO_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_SAMPLE_RATE: u32 = 768000;
 pub const MAX_PREDICTIONS: usize = 250000;
 const MAX_RESAMPLED_FRAMES: usize = MAX_PREDICTIONS * HOP - 1;
@@ -25,9 +24,10 @@ const MAX_RESAMPLED_FRAMES: usize = MAX_PREDICTIONS * HOP - 1;
 /// Original worker's complete-source admission, before resampling or STFT.
 /// The ceiling is conservative; it never truncates the actual source or output.
 pub fn validate_audio_shape(frames: usize, rate: u32) -> Result<usize, String> {
-    if frames == 0 || frames > MAX_AUDIO_BYTES / 4 || rate == 0 || rate > MAX_SAMPLE_RATE {
-        return Err("invalid complete mono PCM shape or byte bound".into());
+    if frames == 0 || rate == 0 || rate > MAX_SAMPLE_RATE {
+        return Err("invalid complete mono PCM shape".into());
     }
+    pcm_byte_extent(frames)?;
     let scaled = (frames as u64)
         .checked_mul(RATE as u64)
         .ok_or("resampled frame extent overflow")?;
@@ -36,6 +36,22 @@ pub fn validate_audio_shape(frames: usize, rate: u32) -> Result<usize, String> {
         return Err("complete source exceeds prediction limit".into());
     }
     Ok(upper as usize)
+}
+
+pub fn pcm_byte_extent(frames: usize) -> Result<usize, String> {
+    frames
+        .checked_mul(size_of::<f32>())
+        .filter(|bytes| *bytes <= isize::MAX as usize)
+        .ok_or_else(|| "complete mono PCM byte extent overflow".into())
+}
+
+fn filled<T: Clone>(length: usize, value: T) -> Result<Vec<T>, String> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(length)
+        .map_err(|error| format!("BeatThis host allocation failed: {error}"))?;
+    output.resize(length, value);
+    Ok(output)
 }
 
 type Create = unsafe extern "C" fn(
@@ -155,12 +171,17 @@ impl Soxr {
         let upper = validate_signal(signal, rate)?;
         checkpoint(cancelled)?;
         if rate == RATE {
-            return Ok(signal.to_vec());
+            let mut output = Vec::new();
+            output
+                .try_reserve_exact(signal.len())
+                .map_err(|error| format!("BeatThis PCM allocation failed: {error}"))?;
+            output.extend_from_slice(signal);
+            return Ok(output);
         }
         // One spare element also covers exact integer ratios. The actual tail
         // must still satisfy the original conservative prediction envelope.
         let capacity = upper.checked_add(1).ok_or("resampled capacity overflow")?;
-        let mut output = vec![0.0; capacity];
+        let mut output = filled(capacity, 0.0)?;
         // SAFETY: libsoxr's documented ABI; mono f32 slices remain allocated,
         // counters bound every pointer and the handle is deleted on every result.
         unsafe {
@@ -299,7 +320,7 @@ pub fn log_mel(signal: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>,
     }
     checkpoint(cancelled)?;
     let frames = signal.len() / HOP + 1;
-    let mut output = vec![0.0; frames * BINS];
+    let mut output = filled(frames * BINS, 0.0)?;
     let window: Vec<_> = (0..FFT)
         .map(|i| 0.5 - 0.5 * ((2.0 * std::f32::consts::PI / FFT as f32) * i as f32).cos())
         .collect();
@@ -377,8 +398,8 @@ pub fn predict(
     let frames = spect.len() / BINS;
     let starts = chunk_starts(frames)?;
     let mut output = Logits {
-        beat: vec![-1000.0; frames],
-        downbeat: vec![-1000.0; frames],
+        beat: filled(frames, -1000.0)?,
+        downbeat: filled(frames, -1000.0)?,
     };
     let mut assigned = 0;
     for start in starts {
@@ -388,7 +409,7 @@ pub fn predict(
         let end = (start + FRAMES as isize).min(frames as isize) as usize;
         let right = (start + FRAMES as isize - frames as isize).clamp(0, BORDER as isize) as usize;
         let length = left + end - first + right;
-        let mut chunk = vec![0.0; length * BINS];
+        let mut chunk = filled(length * BINS, 0.0)?;
         chunk[left * BINS..(left + end - first) * BINS]
             .copy_from_slice(&spect[first * BINS..end * BINS]);
         let logits = run(&chunk)?;
@@ -419,6 +440,9 @@ pub fn predict(
 
 fn peaks_checked(logits: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f64>, String> {
     let mut result = Vec::new();
+    result
+        .try_reserve_exact(logits.len().div_ceil(2))
+        .map_err(|error| format!("BeatThis peak allocation failed: {error}"))?;
     let mut count = 0;
     let mut mean = 0.0;
     for i in 0..logits.len() {
@@ -547,10 +571,16 @@ mod tests {
     }
     #[test]
     fn complete_source_limits_precede_allocations_and_preserve_original_envelope() {
+        let former_limit = 512 * 1024 * 1024;
         assert_eq!(
-            validate_audio_shape(MAX_AUDIO_BYTES / 4, 768000).unwrap(),
+            validate_audio_shape(former_limit / 4 + 1, MAX_SAMPLE_RATE).unwrap(),
             3853517
         );
+        assert_eq!(
+            pcm_byte_extent(former_limit / 4 + 1).unwrap(),
+            former_limit + 4
+        );
+        assert!(pcm_byte_extent(usize::MAX).is_err());
         let last = MAX_PREDICTIONS * HOP - 1;
         assert_eq!(validate_audio_shape(last, RATE).unwrap(), last);
         assert!(
@@ -565,9 +595,8 @@ mod tests {
             (0, RATE),
             (1, 0),
             (1, MAX_SAMPLE_RATE + 1),
-            (MAX_AUDIO_BYTES / 4 + 1, MAX_SAMPLE_RATE),
             (usize::MAX, 1),
-            (MAX_AUDIO_BYTES / 4, 1),
+            (former_limit / 4, 1),
         ] {
             assert!(
                 validate_audio_shape(frames, rate).is_err(),

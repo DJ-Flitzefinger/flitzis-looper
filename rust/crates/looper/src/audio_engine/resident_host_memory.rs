@@ -136,11 +136,8 @@ impl HostReservation {
 
     /// Promise the conversion's concrete block against measured capacity and
     /// outstanding audio promises. This uses the existing shared ledger.
-    #[cfg(windows)]
     pub(super) fn reserve_conversion(bytes: usize) -> Result<Self, HostAdmissionError> {
-        Self::reserve_on(promises().clone(), bytes, || {
-            host_headroom().map(|image| image.available_physical.min(image.available_commit()))
-        })
+        Self::reserve_on(promises().clone(), bytes, conversion_headroom)
     }
 
     fn reserve_on(
@@ -180,6 +177,18 @@ impl HostReservation {
         self.bytes = remaining;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn conversion_headroom() -> Result<u64, String> {
+    host_headroom().map(|image| image.available_physical.min(image.available_commit()))
+}
+
+#[cfg(not(windows))]
+fn conversion_headroom() -> Result<u64, String> {
+    // Where the Windows observation is unavailable, fallible allocation remains
+    // authoritative. Retain checked prospective accounting for concurrent work.
+    Ok(u64::MAX)
 }
 
 impl Drop for HostReservation {
@@ -305,6 +314,25 @@ mod tests {
         assert_eq!(state.bytes, bytes);
         assert!(state.admit(1, headroom(bytes).allowance()).is_err());
         assert_eq!(state.bytes, bytes);
+    }
+
+    #[test]
+    fn conversion_can_use_measured_headroom_above_the_previous_bpm_limit() {
+        let gate = Arc::new(Mutex::new(Promises::default()));
+        let bytes = 640 * MIB;
+        let mut reservation =
+            HostReservation::reserve_on(gate.clone(), bytes as usize, || Ok(bytes)).unwrap();
+        assert!(matches!(
+            HostReservation::reserve_on(gate.clone(), 1, || Ok(bytes)),
+            Err(HostAdmissionError::Pressure { available_bytes, pending_bytes, .. })
+                if available_bytes == bytes && pending_bytes == bytes
+        ));
+        reservation.commit(bytes as usize).unwrap();
+        assert_eq!(gate.lock().unwrap().bytes, 0);
+        assert!(matches!(
+            HostReservation::reserve_on(gate.clone(), bytes as usize, || Ok(bytes - 1)),
+            Err(HostAdmissionError::Pressure { .. })
+        ));
     }
 
     #[test]

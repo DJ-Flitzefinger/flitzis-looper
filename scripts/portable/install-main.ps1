@@ -175,6 +175,12 @@ try {
         Invoke-Checked $uv @('run','--no-sync','maturin','build','--locked','--release','--strip','--interpreter',(Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/python.exe'),'--out',$wheelDirectory) | Out-Host
         $wheels = @(Get-ChildItem -LiteralPath $wheelDirectory -Filter '*.whl')
         if ($wheels.Count -ne 1) { throw 'The build must produce exactly one Release wheel.' }
+        Write-Host 'Building the ONNX BeatThis worker in the Release profile ...'
+        Invoke-Checked $cargo @('rustc','--locked','--release','--target','x86_64-pc-windows-msvc','--manifest-path',(Join-Path $Source 'rust/Cargo.toml'),
+            '-p','flitzis-looper-analysis','--features','native-beat-this-worker','--bin','native-beat-this-worker',
+            '--','-C','target-feature=+crt-static') | Out-Host
+        $beatWorker = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/native-beat-this-worker.exe'
+        Assert-PlainPath $beatWorker
         Write-Host 'Preparing FFmpeg and the standalone runtime ...'
         $ffmpegArchive = Get-VerifiedArchive 'ffmpeg-8.1.1' 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-full_build-shared.zip' '4296b396bdfd5fbc3dfc75ab4c8703354a56963232d65c4182993543df2d2f45'
         $ffmpeg = Join-Path $ffmpegArchive 'ffmpeg-8.1.1-full_build-shared'
@@ -186,7 +192,7 @@ try {
         $redist = $redistributables[0].FullName
         $dllDirectories = @((Join-Path $vcpkg 'installed/x64-windows/bin'), (Join-Path $env:CARGO_TARGET_DIR 'release'))
         $dllDirectories += @(Get-ChildItem -LiteralPath (Join-Path $redist 'x64') -Directory | Where-Object { $_.Name -match '^Microsoft\.VC\d+\.(CRT|OpenMP)$' } | ForEach-Object { $_.FullName })
-        $arguments = @('run','--no-sync','python','-B',(Join-Path $Source 'scripts/portable/build_bundle.py'),'--native-wheel',$wheels[0].FullName,'--native-source-commit',$Commit,'--ffmpeg-dir',(Join-Path $ffmpeg 'bin'),'--output',(Join-Path $Root "cache/bundle-$shortOperation"),'--runtime-directory',$RuntimeDirectory,'--checkout-directory',$Source,'--root',$Root)
+        $arguments = @('run','--no-sync','python','-B',(Join-Path $Source 'scripts/portable/build_bundle.py'),'--native-wheel',$wheels[0].FullName,'--beat-worker-executable',$beatWorker,'--native-source-commit',$Commit,'--ffmpeg-dir',(Join-Path $ffmpeg 'bin'),'--output',(Join-Path $Root "cache/bundle-$shortOperation"),'--runtime-directory',$RuntimeDirectory,'--checkout-directory',$Source,'--root',$Root)
         foreach ($directory in $dllDirectories) { $arguments += @('--dll-dir',$directory) }
         foreach ($license in Get-ChildItem -LiteralPath $licenses -File) { $arguments += @('--license-file',($license.Name + '=' + $license.FullName)) }
         Invoke-Checked $uv $arguments | Out-Host

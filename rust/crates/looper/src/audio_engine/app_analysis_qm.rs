@@ -61,16 +61,7 @@ fn check(cancelled: &impl Fn() -> bool) -> Result<(), Failure> {
     }
 }
 fn admit(parts: &[usize]) -> Result<usize, Failure> {
-    let value = budget::sum(parts).map_err(unavailable)?;
-    if value > LIMIT {
-        return Err(unavailable("512 MiB budget unavailable"));
-    }
-    Ok(value)
-}
-fn remaining(parts: &[usize]) -> Result<usize, Failure> {
-    LIMIT
-        .checked_sub(admit(parts)?)
-        .ok_or_else(|| unavailable("512 MiB budget unavailable"))
+    budget::sum(parts).map_err(unavailable)
 }
 fn array_bytes(n: usize) -> Result<usize, Failure> {
     n.checked_mul(8)
@@ -86,6 +77,7 @@ fn seconds(
         .checked_mul(8)
         .ok_or_else(|| unavailable("QM seconds overflow"))?;
     admit(&[live, bytes])?;
+    let _workspace = reserve_workspace(bytes).map_err(unavailable)?;
     let mut result = Vec::new();
     result
         .try_reserve_exact(values.len())
@@ -105,7 +97,7 @@ fn seconds(
 /// All QM PCM, raw arrays, scalar-estimate objects and preparation temporaries
 /// retire on return, before the final joint-tree/string ownership check.
 pub(super) fn observation(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     context: &NeuralContext,
     nn_mono: &str,
@@ -138,7 +130,7 @@ pub(super) fn observation(
 /// Preserve a completed strict refusal for the separate approximate policy.
 /// Existing successful-only callers still use `observation` and the same gate.
 pub(super) fn completed_observation(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     context: &NeuralContext,
     nn_mono: &str,
@@ -160,7 +152,7 @@ pub(super) fn completed_observation(
 }
 
 fn observe_completed(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     context: &NeuralContext,
     nn_mono: &str,
@@ -171,8 +163,11 @@ fn observe_completed(
     mut agreement: impl FnMut(f64, f64) -> Result<f64, Failure>,
 ) -> Result<CompletedObservation, Failure> {
     check(cancelled)?;
-    let available = remaining(&[base_core])?;
-    let prepared = analysis_pcm::prepare_qm_input(sample, rate, nn_mono, available, cancelled)
+    let working_bytes =
+        analysis_pcm::qm_working_bytes(sample.frame_count(), rate).map_err(unavailable)?;
+    admit(&[base_core, working_bytes])?;
+    let preparation = reserve_workspace(working_bytes).map_err(unavailable)?;
+    let prepared = analysis_pcm::prepare_qm_input(sample, rate, nn_mono, working_bytes, cancelled)
         .map_err(|error| match error {
             analysis_pcm::PcmError::Cancelled => Failure::Cancelled,
             other => unavailable(other),
@@ -198,6 +193,7 @@ fn observe_completed(
         return Err(unavailable("QM analyzer geometry differs"));
     }
     drop(samples);
+    drop(preparation);
     let raw_live = admit(&[base_core, qm_working_bytes, SMALL])?;
     let reserve = app_tempo::preparation_reservation(
         raw.beat_frames().len(),
@@ -217,16 +213,12 @@ fn observe_completed(
         admit(&[raw_live, array_bytes(beats.capacity())?])?,
         cancelled,
     )?;
-    let fit_available = remaining(&[
-        raw_live,
-        array_bytes(beats.capacity())?,
-        array_bytes(downbeats.capacity())?,
-    ])?;
+    let _fit = reserve_workspace(reserve).map_err(unavailable)?;
     let qm_estimate = app_tempo::estimate_with_budget_cancelled(
         &beats,
         analyzer_frames as f64 / 44_100.0,
         downbeats.len(),
-        fit_available,
+        reserve,
         cancelled,
     )
     .map_err(|_| Failure::Cancelled)?;
@@ -256,6 +248,7 @@ fn observe_completed(
             reserve,
             workspace,
         ])?;
+        let _mean = reserve_workspace(workspace).map_err(unavailable)?;
         app_tempo::mean::interior(&beats, source_extent, workspace, cancelled)
             .map_err(local_failure)?
     } else {
@@ -312,7 +305,7 @@ fn observe_completed(
 }
 
 pub(super) fn attempt(
-    sample: &SampleBuffer,
+    sample: &CompletePcm<'_>,
     rate: u32,
     context: &NeuralContext,
     nn_mono: &str,
@@ -328,6 +321,7 @@ pub(super) fn attempt(
 ) -> Result<Choice, Failure> {
     check(cancelled)?;
     admit(&[base_core, SMALL])?;
+    let _header = reserve_workspace(SMALL).map_err(unavailable)?;
     let neural_result = neural_result_header(tree);
     let observed = observation(
         sample,
@@ -416,6 +410,7 @@ fn complete(
         grid_bytes,
         size_of::<LoadedAnalysis>(),
     ])?;
+    let _serialization = reserve_workspace(string_bound).map_err(unavailable)?;
     check(cancelled)?;
     let method_json = serde_json::to_string(tree).map_err(unavailable)?;
     admit(&[

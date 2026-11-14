@@ -66,6 +66,43 @@ struct NativeCudaRuntime {
     provider_sha256: String,
 }
 
+impl NativeCudaRuntime {
+    fn valid(&self) -> bool {
+        self.package_sha256 == CUDA_PACKAGE
+            && self.provider_sha256 == CUDA_PROVIDER
+            && self.driver_api_version > 0
+            && !self.device_name.trim().is_empty()
+            && self.device_name.chars().count() <= 256
+            && !self.device_name.chars().any(char::is_control)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCudaStartupError {
+    stage: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    code: Option<u32>,
+}
+
+impl NativeCudaStartupError {
+    fn fallback_reason(&self) -> Option<&'static str> {
+        match (self.stage.as_str(), self.code) {
+            ("driver_load", Some(126))
+            | ("driver_init", Some(100))
+            | ("driver_device" | "session_initialization", Some(100 | 101))
+            | ("provider_registration", None) => Some("cuda_unavailable"),
+            ("driver_load" | "driver_symbol", Some(127))
+            | ("driver_init" | "driver_device", Some(3 | 46 | 802 | 803 | 804))
+            | (
+                "session_initialization",
+                Some(2 | 3 | 35 | 46 | 214 | 700 | 702 | 719 | 802 | 803 | 804),
+            ) => Some("cuda_startup_error"),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NativeCudaExecutionReceipt {
@@ -77,32 +114,39 @@ pub(super) struct NativeCudaExecutionReceipt {
     ort_version: String,
     ort_api: u32,
     ort_package_sha256: String,
-    cuda: NativeCudaRuntime,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cuda: Option<NativeCudaRuntime>,
     cuda_kernel_events: Option<u32>,
     fallback_reason: Option<String>,
     cuda_error: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cuda_startup_error: Option<NativeCudaStartupError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cuda_cache_error: Option<String>,
 }
 
 impl NativeCudaExecutionReceipt {
     pub(super) fn validate(&self, policy: &str) -> Result<(), String> {
-        let cuda = &self.cuda;
         let qualified = match self.device.as_str() {
             "cuda:0" => {
                 self.ort_package_sha256 == CUDA_PACKAGE
-                    && self.device_name.as_ref() == Some(&cuda.device_name)
+                    && self.cuda.as_ref().is_some_and(|cuda| {
+                        cuda.valid() && self.device_name.as_ref() == Some(&cuda.device_name)
+                    })
                     && self
                         .cuda_kernel_events
                         .is_some_and(|n| (1..=100_000).contains(&n))
                     && self.fallback_reason.is_none()
                     && self.cuda_error.is_none()
+                    && self.cuda_startup_error.is_none()
+                    && self.cuda_cache_error.is_none()
             }
             "cpu" => {
                 policy == "auto"
                     && self.ort_package_sha256 == CPU_PACKAGE
                     && self.device_name.is_none()
                     && self.cuda_kernel_events.is_none()
-                    && self.fallback_reason.as_deref() == Some("cuda_device_error")
-                    && matches!(self.cuda_error, Some(2 | 214 | 700 | 702 | 719))
+                    && self.valid_fallback()
             }
             _ => false,
         };
@@ -113,15 +157,34 @@ impl NativeCudaExecutionReceipt {
             || self.precision != "float32"
             || self.ort_version != "1.24.4"
             || self.ort_api != 24
-            || cuda.package_sha256 != CUDA_PACKAGE
-            || cuda.provider_sha256 != CUDA_PROVIDER
-            || cuda.driver_api_version <= 0
-            || cuda.device_name.trim().is_empty()
-            || cuda.device_name.chars().count() > 256
-            || cuda.device_name.chars().any(char::is_control)
         {
             return Err("Beat This Native CUDA execution evidence differs from the request".into());
         }
         Ok(())
+    }
+
+    fn valid_fallback(&self) -> bool {
+        if let Some(detail) = &self.cuda_cache_error {
+            return self.cuda_startup_error.is_none()
+                && self.cuda.is_none()
+                && self.cuda_error.is_none()
+                && self.fallback_reason.as_deref() == Some("cuda_cache_unavailable")
+                && (1..=512).contains(&detail.chars().count())
+                && !detail.chars().any(char::is_control);
+        }
+        match (&self.cuda_startup_error, &self.cuda) {
+            (None, Some(cuda)) => {
+                cuda.valid()
+                    && self.fallback_reason.as_deref() == Some("cuda_device_error")
+                    && matches!(self.cuda_error, Some(2 | 214 | 700 | 702 | 719))
+            }
+            (Some(startup), None) => {
+                self.cuda_error.is_none()
+                    && startup
+                        .fallback_reason()
+                        .is_some_and(|reason| self.fallback_reason.as_deref() == Some(reason))
+            }
+            _ => false,
+        }
     }
 }

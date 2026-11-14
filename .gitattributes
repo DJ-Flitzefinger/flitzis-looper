@@ -18,6 +18,9 @@ scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch text eol=lf whi
 
 # Native BeatThis CUDA manifests are hashed as exact loader inputs.
 workers/beat_this/native_cuda/*.json text eol=lf
+assets/models/beat-this/**/*.txt -text -whitespace
+assets/models/beat-this/windows-x64/soxr-source/** -text -whitespace
+assets/models/beat-this/windows-x64/soxr-source/*.xz binary
 
 # HTDemucs worker and App bind the same source-owned approval bytes.
 workers/htdemucs/native_cpu/*.json text eol=lf

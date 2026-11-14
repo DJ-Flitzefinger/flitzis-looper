@@ -1,4 +1,4 @@
-"""Package an existing Release and installed runtime without installing anything."""
+"""Package a Release runtime and the matching BeatThis worker."""
 
 # Standalone build command.
 import argparse
@@ -55,6 +55,7 @@ CANDIDATE_OWNER = {"app": "flitzis-looper-candidate", "schema_version": 1}
 NATIVE_NAME = "flitzis_looper_audio.cp314-win_amd64.pyd"
 NATIVE_ENTRY = "flitzis_looper_audio/" + NATIVE_NAME
 WHEEL_TAG = "cp314-cp314-win_amd64"
+BEAT_WORKER_EXECUTABLE = Path("runtime/beat-this/native-beat-this-worker.exe")
 VENDORED_PACKAGE = Path("flitzis_bs_roformer")
 VENDORED_SOURCE = Path("vendor/bs_roformer/src") / VENDORED_PACKAGE
 NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
@@ -414,7 +415,7 @@ def copy_licenses(staging: Path, values: list[str]) -> None:
     )
 
 
-def preflight(staging: Path, checkout: Path, root: Path) -> None:
+def private_python_environment(runtime: Path) -> dict[str, str]:
     env = os.environ.copy()
     for name in [
         "PYTHONPATH",
@@ -424,27 +425,94 @@ def preflight(staging: Path, checkout: Path, root: Path) -> None:
         "RUBBERBAND_DLL_DIRS",
     ]:
         env.pop(name, None)
-    env["PYTHONHOME"] = str(staging / "python")
+    env["PYTHONHOME"] = str(runtime / "python")
     env["PYTHONNOUSERSITE"] = "1"
     env["PATH"] = os.pathsep.join([
-        str(staging / "python"),
+        str(runtime / "python"),
         str(Path(os.environ["SYSTEMROOT"]) / "System32"),
     ])
+    return env
+
+
+def copy_beat_worker(runtime: Path, executable: Path) -> None:
+    require(
+        executable.is_file()
+        and not any(
+            path.is_symlink() or path.is_junction() for path in (executable, *executable.parents)
+        )
+        and 0 < executable.stat().st_size <= 64 * 1024 * 1024,
+        "Use the matching Windows x64 Release BeatThis worker executable",
+    )
+    destination = runtime / BEAT_WORKER_EXECUTABLE
+    destination.parent.mkdir(parents=True)
+    shutil.copyfile(executable, destination)
+
+
+def beat_worker_executable(args: argparse.Namespace, output: Path) -> Path:
+    """Use the installer's own Cargo output, or build from this ZIP candidate's source."""
+    executable = args.beat_worker_executable
+    if args.runtime_directory:
+        require(executable is not None, "Ordinary installs must supply their built BeatThis worker")
+        assert executable is not None
+        return executable
+    require(executable is None, "The ZIP builder compiles its BeatThis worker from this checkout")
+    from flitzis_looper.analysis.native_provisioning import build_native_worker  # noqa: PLC0415
+
+    return build_native_worker(REPO, output / "beat-worker-build")
+
+
+def stage_bundle_worker(root: Path, runtime: Path, checkout: Path, asset_cache: Path) -> None:
+    """Give a standalone ZIP its own complete, relocatable worker selection."""
+    report = root / "cache/analysis-package.json"
     subprocess.run(
         [
-            str(staging / "python/python.exe"),
+            str(runtime / "python/python.exe"),
             "-s",
             "-B",
-            str(staging / "bootstrap.py"),
+            str(runtime / "prepare_analysis.py"),
             "--root",
             str(root),
             "--checkout",
             str(checkout),
             "--runtime",
-            str(staging),
-            "--check-build-runtime",
+            str(runtime),
+            "--mode",
+            "bundle",
+            "--asset-cache",
+            str(asset_cache),
+            "--report-json",
+            str(report),
         ],
-        env=env,
+        env=private_python_environment(runtime),
+        check=True,
+    )
+    result = json.loads(report.read_text(encoding="utf-8"))
+    require(
+        result["portable_analysis"] == "passed" and result["execution_policy"] == "auto",
+        "Bundle preparation did not establish the ONNX Runtime auto worker",
+    )
+    selected = root / "analysis-runtime/beat-this/current.json"
+    with selected.open("xb") as stream:
+        stream.write(base64.b64decode(result["pointer_bytes"], validate=True))
+    report.unlink()
+
+
+def preflight(runtime: Path, checkout: Path, root: Path, *, require_analysis: bool) -> None:
+    subprocess.run(
+        [
+            str(runtime / "python/python.exe"),
+            "-s",
+            "-B",
+            str(runtime / "bootstrap.py"),
+            "--root",
+            str(root),
+            "--checkout",
+            str(checkout),
+            "--runtime",
+            str(runtime),
+            "--check-runtime" if require_analysis else "--check-build-runtime",
+        ],
+        env=private_python_environment(runtime),
         check=True,
     )
 
@@ -584,8 +652,11 @@ def build(args: argparse.Namespace) -> None:
     emit(f"Copied {len(dependencies)} non-development distributions")
     native, wheel_sha256 = copy_application(runtime, checkout, args.native_wheel)
     copy_external_runtime(runtime, checkout, args)
+    copy_beat_worker(runtime, beat_worker_executable(args, output))
     copy_licenses(runtime, args.license_file)
-    preflight(runtime, checkout, root)
+    if not args.runtime_directory:
+        stage_bundle_worker(root, runtime, checkout, output / "beat-worker-assets")
+    preflight(runtime, checkout, root, require_analysis=not args.runtime_directory)
     # Input data is introduced only during activation; its structural parent
     # must already be owned so a later empty parent is safe to retire.
     (checkout / "config").mkdir(exist_ok=True)
@@ -677,6 +748,9 @@ def package_candidate(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-wheel", type=Path, required=True)
+    parser.add_argument(
+        "--beat-worker-executable", type=Path, help="Internal source installer input"
+    )
     parser.add_argument("--native-source-commit", required=True)
     parser.add_argument("--ffmpeg-dir", type=Path, required=True)
     parser.add_argument("--dll-dir", type=Path, action="append", default=[])

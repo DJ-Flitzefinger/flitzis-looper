@@ -228,7 +228,7 @@ fn unsupported_relation_or_outside_qm_cannot_replace_the_primary() {
 }
 
 #[test]
-fn minimal_and_late_budget_failures_cannot_restore_an_outside_bpm() {
+fn minimal_and_late_extent_failures_cannot_restore_an_outside_bpm() {
     let mut tree = primary(174.0);
     let base = tree.to_string();
     let result = apply(
@@ -236,7 +236,7 @@ fn minimal_and_late_budget_failures_cannot_restore_an_outside_bpm() {
         174.0,
         &mut tree,
         base,
-        LIMIT,
+        usize::MAX,
         0,
         0,
         0,
@@ -247,7 +247,7 @@ fn minimal_and_late_budget_failures_cannot_restore_an_outside_bpm() {
     assert!(result.bpm.is_none() && result.method_json.is_none());
     let mut tree = primary(174.0);
     let base = tree.to_string();
-    let live = LIMIT - 2 * SMALL;
+    let live = usize::MAX - 2 * SMALL;
     let result = apply(
         range(),
         174.0,

@@ -95,8 +95,9 @@ mod windows {
             return Err("native BeatThis worker requires its pinned ORT package".into());
         }
 
-        let (raw, sha) = own.read_checked(pcm, beat_audio::MAX_AUDIO_BYTES, |len| {
-            if len != (frames as u64) * 4 {
+        let pcm_bytes = beat_audio::pcm_byte_extent(frames)?;
+        let (raw, sha) = own.read_checked(pcm, pcm_bytes, |len| {
+            if len != pcm_bytes as u64 {
                 return Err("native BeatThis PCM extent differs".into());
             }
             Ok(())
@@ -106,6 +107,7 @@ mod windows {
         }
         let signal = own.floats(&raw)?;
         drop(raw);
+        let _crt = runtime::load_worker_crt(root, &context)?;
         let soxr = Soxr::load_checked(&root.join("soxr.dll"), SOXR_SHA, &context)?;
         context.checkpoint("frontend.resample")?;
         let mut prepared = soxr.resample(&signal, rate, &|| context.cancelled());
@@ -136,7 +138,18 @@ mod windows {
         let admission = admission.ok_or("missing pinned ORT admission")?;
         runtime::commit(environment)?;
         context.checkpoint("model.prepare")?;
-        let device = on_cuda.then(|| cuda::device(&context)).transpose()?;
+        let mut evidence = serde_json::json!({
+            "schema_version": 1,
+            "mono_sha256": sha,
+            "frame_count": frames,
+            "sample_rate_hz": rate,
+            "graph_sha256": graph_sha,
+        });
+        let mut startup_failure = None;
+        let device = on_cuda
+            .then(|| cuda::device(&context, &mut startup_failure))
+            .transpose();
+        let device = settle_startup(device, startup_failure, &mut evidence, fault, &context)?;
         let mut profile = on_cuda
             .then(|| own.profile(&out.join("ort-profile")))
             .transpose()?;
@@ -145,8 +158,20 @@ mod windows {
         } else {
             Provider::Cpu
         };
-        let mut model =
-            BeatModel::load_worker(&graph, GRAPH_SHA, profile.as_deref(), provider, &context)?;
+        let mut startup_failure = None;
+        let model = BeatModel::load_worker(
+            &graph,
+            GRAPH_SHA,
+            profile.as_deref(),
+            provider,
+            &context,
+            |stage, code, message| {
+                if on_cuda {
+                    startup_failure = cuda::model_startup_error(stage, code, message);
+                }
+            },
+        );
+        let mut model = settle_startup(model, startup_failure, &mut evidence, fault, &context)?;
         drop(graph);
         let mut device_error = None;
         let mut cuda_kernel_events = 0;
@@ -170,13 +195,6 @@ mod windows {
             &|| context.cancelled(),
         );
         drop(spect);
-        let mut evidence = serde_json::json!({
-            "schema_version": 1,
-            "mono_sha256": sha,
-            "frame_count": frames,
-            "sample_rate_hz": rate,
-            "graph_sha256": graph_sha,
-        });
         let logits = match logits {
             Ok(logits) => logits,
             Err(error) => {
@@ -211,5 +229,24 @@ mod windows {
         evidence["beat_seconds"] = serde_json::json!(beats);
         evidence["downbeat_seconds"] = serde_json::json!(downbeats);
         Ok(evidence)
+    }
+
+    fn settle_startup<T>(
+        result: Result<T, String>,
+        failure: Option<cuda::StartupError>,
+        evidence: &mut serde_json::Value,
+        fault: &mut Option<serde_json::Value>,
+        context: &flitzis_looper_analysis::trial_lifetime::Context,
+    ) -> Result<T, String> {
+        if result.is_err()
+            && let Some(failure) = failure
+        {
+            context.checkpoint("cuda.startup_failure")?;
+            context.cleanup()?;
+            let mut receipt = std::mem::take(evidence);
+            receipt["cuda_startup_error"] = serde_json::json!(failure);
+            *fault = Some(receipt);
+        }
+        result
     }
 }

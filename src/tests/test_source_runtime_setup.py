@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.analysis import beat_cuda_cache
 from flitzis_looper.analysis.contracts import BeatModelIdentity
 from flitzis_looper.analysis.worker import WorkerConfiguration
 
@@ -25,6 +26,7 @@ def source_setup() -> ModuleType:
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.production_windows = lambda: False
     return module
 
 
@@ -59,6 +61,27 @@ def test_source_main_defaults_to_repo_owned_required_worker_and_optional_stems(
     report = json.loads(capsys.readouterr().out)
     assert report["source_runtime"] == "passed"
     assert report["inference_executed"] is False
+
+
+def test_windows_check_uses_onnx_and_does_not_warm_cuda(
+    source_setup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = Mock()
+    load = Mock(return_value=configuration)
+    warm = Mock()
+    status = {"status": "pending", "warmup_executed": False}
+    monkeypatch.setattr(source_setup, "load_production_worker", load)
+    monkeypatch.setattr(source_setup, "require_native_worker_capability", Mock())
+    monkeypatch.setattr(beat_cuda_cache, "cuda_cache_status", Mock(return_value=status))
+    monkeypatch.setattr(beat_cuda_cache, "ensure_cuda_cache", warm)
+    worker_root = tmp_path / "models/beat-this"
+    scratch = tmp_path / ".cache/runtime-setup"
+    assert source_setup.prepare_windows_worker(tmp_path, worker_root, scratch, check=True) == (
+        configuration,
+        status,
+    )
+    load.assert_called_once_with(worker_root, scratch)
+    warm.assert_not_called()
 
 
 @pytest.mark.parametrize(

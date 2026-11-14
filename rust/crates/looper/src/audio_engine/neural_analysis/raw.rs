@@ -317,7 +317,9 @@ impl BeatThisRawData {
             return Err("Beat This capture source, request or pinned model differs".into());
         }
         let logits = expected_logit_count(source.source_frame_count, source.source_sample_rate_hz)?;
-        if (source.source_frame_count as u128) * 4 > 512 * 1024 * 1024 {
+        if request.schema_version <= 2
+            && (source.source_frame_count as u128) * 4 > 512 * 1024 * 1024
+        {
             return Err("Beat This staged PCM exceeds worker limit".into());
         }
         if result.schema_version != request.schema_version

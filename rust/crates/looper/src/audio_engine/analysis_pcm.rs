@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub(crate) mod fft;
 mod streamed;
 use fft::{RESAMPLE_CHUNK_FRAMES, tail_call_budget};
+pub(super) use streamed::stream_complete_f32_le;
 pub(crate) use streamed::{
     PcmStagingPlan, key_input_from_f32_le, key_input_to_f32_le, key_stream_working_bytes,
     staging_plan,
@@ -29,7 +30,7 @@ const MAX_RATE_HZ: u32 = 384_000;
 mod default;
 pub(super) use default::{default_analysis_peak, prepare_default_mono_f64};
 mod qm;
-pub(super) use qm::{QmPcm, prepare_qm_input};
+pub(super) use qm::{QmPcm, prepare_qm_input, qm_working_bytes};
 
 #[cfg(test)]
 mod admission_tests {
@@ -75,6 +76,38 @@ pub(crate) struct PcmIdentity {
     pub request_id: u64,
     pub source_id: String,
     pub source_generation: u64,
+}
+
+/// Complete loaded playback bytes for off-thread BPM analysis. An already complete
+/// resident buffer is borrowed, while a finite view can read the sealed full source
+/// into a fallibly allocated Vec without creating a second full-source Arc.
+pub(super) struct CompletePcm<'a> {
+    pub samples: std::borrow::Cow<'a, [f32]>,
+    pub channels: usize,
+}
+
+impl<'a> CompletePcm<'a> {
+    pub(super) fn borrow(sample: &'a SampleBuffer, rate: u32) -> Result<Self, PcmError> {
+        if sample.resident_start() != 0
+            || sample.resident_end() != sample.frame_count()
+            || sample
+                .residency
+                .as_ref()
+                .is_some_and(|view| view.source.sample_rate_hz != rate)
+        {
+            return Err(PcmError::InvalidInput(
+                "complete analysis source or rate differs",
+            ));
+        }
+        Ok(Self {
+            samples: std::borrow::Cow::Borrowed(&sample.samples),
+            channels: sample.channels,
+        })
+    }
+
+    pub(super) fn frame_count(&self) -> usize {
+        self.samples.len().checked_div(self.channels).unwrap_or(0)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -385,7 +418,18 @@ pub(crate) fn resample_mono_cancellable(
     check_limit(total_bytes, max_working_bytes, "resampler total PCM bytes")?;
     let input = InterleavedOwned::new_from(mono, 1, input_frames)
         .map_err(|error| PcmError::Resample(error.to_string()))?;
-    let mut output = InterleavedOwned::new_from(vec![0.0_f32; output_frames], 1, output_frames)
+    let mut output_samples = Vec::new();
+    output_samples
+        .try_reserve_exact(output_frames)
+        .map_err(|_| PcmError::Limit("resampler allocation unavailable"))?;
+    for first in (0..output_frames).step_by(CHUNK_FRAMES) {
+        check_cancelled(cancelled)?;
+        output_samples.resize(
+            first.saturating_add(CHUNK_FRAMES).min(output_frames),
+            0.0_f32,
+        );
+    }
+    let mut output = InterleavedOwned::new_from(output_samples, 1, output_frames)
         .map_err(|error| PcmError::Resample(error.to_string()))?;
     let mut indexing = Indexing {
         input_offset: 0,

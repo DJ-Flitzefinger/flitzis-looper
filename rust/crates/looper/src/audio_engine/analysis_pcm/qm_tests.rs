@@ -1,4 +1,5 @@
 use super::*;
+use crate::messages::SampleBuffer;
 use std::cell::Cell;
 
 fn sample(values: Vec<f32>, channels: usize) -> SampleBuffer {
@@ -35,9 +36,14 @@ fn optional_qm_input_matches_the_complete_normal_converter() {
                 channels,
             );
             let expected = super::super::default::prepare_default_mono_f64(&input, rate).unwrap();
-            let prepared =
-                prepare_qm_input(&input, rate, &nn_hash(&input), 512 * 1024 * 1024, &|| false)
-                    .unwrap();
+            let prepared = prepare_qm_input(
+                &CompletePcm::borrow(&input, rate).unwrap(),
+                rate,
+                &nn_hash(&input),
+                512 * 1024 * 1024,
+                &|| false,
+            )
+            .unwrap();
             assert_eq!(prepared.samples, expected);
             assert_eq!(
                 prepared.samples.len(),
@@ -59,14 +65,24 @@ fn optional_qm_input_matches_the_complete_normal_converter() {
 #[test]
 fn mono_signed_zero_uses_distinct_normal_and_exact_nn_rules() {
     let input = sample(vec![-0.0, 0.0, 0.5, -0.5], 1);
-    let prepared = prepare_qm_input(&input, 44_100, &nn_hash(&input), 32 * 1024 * 1024, &|| {
-        false
-    })
+    let prepared = prepare_qm_input(
+        &CompletePcm::borrow(&input, 44_100).unwrap(),
+        44_100,
+        &nn_hash(&input),
+        32 * 1024 * 1024,
+        &|| false,
+    )
     .unwrap();
     assert_eq!(prepared.samples[0].to_bits(), (-0.0_f64).to_bits());
     assert_ne!(prepared.normal_mono_sha256, nn_hash(&input));
     assert!(matches!(
-        prepare_qm_input(&input, 44_100, &"0".repeat(64), 32 * 1024 * 1024, &|| false),
+        prepare_qm_input(
+            &CompletePcm::borrow(&input, 44_100).unwrap(),
+            44_100,
+            &"0".repeat(64),
+            32 * 1024 * 1024,
+            &|| false
+        ),
         Err(PcmError::InvalidInput(_))
     ));
 }
@@ -75,13 +91,23 @@ fn mono_signed_zero_uses_distinct_normal_and_exact_nn_rules() {
 fn qm_budget_and_cancellation_are_distinct_before_and_during_preparation() {
     let input = sample(vec![0.1; 24_019], 1);
     assert!(matches!(
-        prepare_qm_input(&input, 48_001, &nn_hash(&input), 1024 * 1024, &|| false),
+        prepare_qm_input(
+            &CompletePcm::borrow(&input, 48_001).unwrap(),
+            48_001,
+            &nn_hash(&input),
+            1024 * 1024,
+            &|| false
+        ),
         Err(PcmError::Limit(_))
     ));
     assert!(matches!(
-        prepare_qm_input(&input, 48_000, &nn_hash(&input), 512 * 1024 * 1024, &|| {
-            true
-        }),
+        prepare_qm_input(
+            &CompletePcm::borrow(&input, 48_000).unwrap(),
+            48_000,
+            &nn_hash(&input),
+            512 * 1024 * 1024,
+            &|| { true }
+        ),
         Err(PcmError::Cancelled)
     ));
     let calls = Cell::new(0);
@@ -91,7 +117,7 @@ fn qm_budget_and_cancellation_are_distinct_before_and_during_preparation() {
     };
     assert!(matches!(
         prepare_qm_input(
-            &input,
+            &CompletePcm::borrow(&input, 48_000).unwrap(),
             48_000,
             &nn_hash(&input),
             512 * 1024 * 1024,

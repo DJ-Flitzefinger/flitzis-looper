@@ -1,4 +1,4 @@
-"""Prepare/check an installation-owned, movable BeatThis runtime without inference."""
+"""Stage and verify the private Windows x64 ONNX BeatThis worker."""
 
 import argparse
 import base64
@@ -6,20 +6,25 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
-import shutil
 import stat
 import subprocess
 import sys
 from pathlib import Path
-from uuid import uuid4
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from flitzis_looper.analysis.native_beat_worker import NativeWorkerConfiguration
+
+WORKER_EXECUTABLE = Path("runtime/beat-this/native-beat-this-worker.exe")
+WORKER_EXE_LIMIT = 64 * 1024 * 1024
 
 
-def invalid(message):
+def invalid(message: str) -> None:
     raise ValueError(message)
 
 
 def physical(path: Path, root: Path | None = None) -> Path:
+    """Reject reparse points and compare containment independently of SUBST spelling."""
     path = Path(os.path.abspath(path))
     for part in reversed((path, *path.parents)):
         if part.exists() or part.is_symlink():
@@ -28,7 +33,7 @@ def physical(path: Path, root: Path | None = None) -> Path:
                 invalid("Portable analysis paths must not traverse links")
     if root is not None:
 
-        def canonical(value):
+        def canonical(value: Path) -> Path:
             name = str(value.resolve())
             if name.startswith("\\\\?\\UNC\\"):
                 name = "\\\\" + name[8:]
@@ -46,13 +51,6 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def read_json(path: Path) -> dict:
-    physical(path)
-    if path.stat().st_size > 4 * 1024 * 1024:
-        invalid("Portable analysis metadata exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8-sig"))
-
-
 def write_new_json(path: Path, value: dict) -> None:
     physical(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,265 +59,52 @@ def write_new_json(path: Path, value: dict) -> None:
         stream.write("\n")
 
 
-def clean_environment(root: Path) -> dict:
-    environment = dict(os.environ)
-    for name in tuple(environment):
-        if name.startswith(("PYTHON", "FLITZIS_WORKSPACE", "UV_")) or name in {
-            "VIRTUAL_ENV",
-            "FLITZIS_NATIVE_EXTENSION_DIR",
-            "FLITZIS_BEAT_THIS_ROOT",
-        }:
-            environment.pop(name, None)
-    environment.update(
-        PYTHONDONTWRITEBYTECODE="1",
-        PYTHONNOUSERSITE="1",
-        UV_CACHE_DIR=str(root / "cache/uv"),
-        UV_PYTHON_INSTALL_DIR=str(root / "tools/python"),
-        UV_TOOL_DIR=str(root / "tools/uv-tools"),
-        UV_LINK_MODE="copy",
-        UV_PYTHON_PREFERENCE="only-managed",
-        UV_NO_PROGRESS="1",
-        TEMP=str(root / "cache/temp"),
-        TMP=str(root / "cache/temp"),
-        TORCH_HOME=str(root / "models/torch"),
-        HF_HOME=str(root / "models/huggingface"),
-        HF_HUB_CACHE=str(root / "models/huggingface/hub"),
-    )
-    return environment
-
-
-def inspect_python(interpreter: Path, root: Path) -> dict:
-    """Inspect real import origins; an executable's name is not portability proof."""
-    code = (
-        "import json,pathlib,sys,ssl,sqlite3,ctypes; "
-        "print(json.dumps({'version':list(sys.version_info[:3]), 'executable':sys.executable, "
-        "'prefix':sys.prefix, 'base_prefix':sys.base_prefix, 'paths':sys.path}))"
-    )
-    process = subprocess.run(
-        [str(interpreter), "-I", "-B", "-c", code],
-        env=clean_environment(root),
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    value = json.loads(process.stdout)
-    if value["version"] != [3, 12, 13]:
-        invalid("Portable analysis requires CPython 3.12.13")
-    for name in ("executable", "prefix", "base_prefix"):
-        physical(Path(value[name]), root)
-    for entry in value["paths"]:
-        if entry:
-            physical(Path(entry), root)
-    return value
-
-
-def materialize_python(base: Path, environment: Path, root: Path) -> None:
-    """Replace this owned venv redirector with real Python and relative search paths.
-
-    CPython's documented ._pth layout ignores registry/environment discovery.
-    No host home/executable or staging path survives in pyvenv.cfg.
-    """
-    base, environment = physical(base, root), physical(environment, root)
-    base_info = inspect_python(base, root)
-    source = physical(Path(base_info["base_prefix"]), root)
-    copied = []
-    for current, directories, files in os.walk(source, followlinks=False):
-        directories[:] = sorted(
-            name
-            for name in directories
-            if name
-            not in {
-                "site-packages",
-                "__pycache__",
-                "Scripts",
-                "include",
-                "libs",
-                "tcl",
-                "Doc",
-            }
-        )
-        for name in directories:
-            physical(Path(current) / name, source)
-        relative = Path(current).relative_to(source)
-        for name in sorted(files):
-            original = physical(Path(current) / name, source)
-            if original.suffix in {".pyc", ".pyo", ".pdb"} or name.endswith("._pth"):
-                continue
-            destination = physical(environment / relative / name, environment)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(original, destination)
-            copied.append(destination)
-    scripts = environment / "Scripts"
-    scripts.mkdir(exist_ok=True)
-    for original in [source / "python.exe", *source.glob("*.dll")]:
-        destination = scripts / original.name
-        shutil.copyfile(physical(original, source), physical(destination, environment))
-        copied.append(destination)
-    search = "../Lib\n../DLLs\n../Lib/site-packages\nimport site\n"
-    for name in ("python312._pth", "python._pth"):
-        path = scripts / name
-        path.write_text(search, encoding="ascii", newline="\n")
-        copied.append(path)
-    configuration = environment / "pyvenv.cfg"
-    configuration.write_text(
-        "include-system-site-packages = false\n", encoding="ascii", newline="\n"
-    )
-    copied.append(configuration)
-    inventory = {path.relative_to(environment).as_posix(): digest(path) for path in copied}
-    write_new_json(
-        environment / "portable-python.json",
-        {
-            "schema_version": 1,
-            "python_version": "3.12.13",
-            "files": inventory,
-        },
-    )
-    inspect_python(scripts / "python.exe", environment)
-
-
-def verify_python(environment: Path, root: Path) -> dict:
-    environment = physical(environment, root)
-    inventory = read_json(environment / "portable-python.json")
-    if inventory.get("schema_version") != 1 or inventory.get("python_version") != "3.12.13":
-        invalid("Unknown Portable analysis interpreter inventory")
-    files = inventory.get("files")
-    required = {
-        "Scripts/python.exe",
-        "Scripts/python312.dll",
-        "Scripts/python312._pth",
-        "pyvenv.cfg",
-    }
-    if not isinstance(files, dict) or not required <= files.keys() or len(files) > 20000:
-        invalid("Incomplete Portable analysis interpreter closure")
-    for name, expected in files.items():
-        path = Path(name)
-        if (
-            path.is_absolute()
-            or ".." in path.parts
-            or "\\" in name
-            or not re.fullmatch(r"[0-9a-f]{64}", expected)
-        ):
-            invalid("Invalid Portable analysis interpreter inventory path")
-        if digest(physical(environment / path, environment)) != expected:
-            invalid("Portable analysis interpreter bytes changed")
-    return inspect_python(environment / "Scripts/python.exe", environment)
-
-
-def configure(root: Path, checkout: Path, runtime: Path):
+def configure(root: Path, checkout: Path, runtime: Path) -> list[object]:
     specification = importlib.util.spec_from_file_location(
         "portable_analysis_bootstrap", checkout / "scripts/portable/bootstrap.py"
     )
+    assert specification is not None
+    assert specification.loader is not None
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module.configure(root, checkout, runtime)
 
 
-def verified_installation(root: Path, installation: Path, setup, scratch: Path):
-    configuration = setup.load_staged_worker_configuration(
-        root / "analysis-runtime/beat-this", installation, scratch
+def verify_release_worker(
+    configuration: NativeWorkerConfiguration, executable: Path, *, engine_type: object | None = None
+) -> None:
+    """Bind the selected worker to the packaged executable and matching App capability."""
+    from flitzis_looper.analysis.native_beat_worker import (  # noqa: PLC0415
+        is_production_worker,
+        require_native_worker_capability,
     )
-    interpreter = verify_python(installation / ".venv", root)
-    report = scratch / ("worker-environment-" + uuid4().hex + ".json")
-    subprocess.run(
-        [
-            str(configuration.interpreter),
-            "-I",
-            "-B",
-            str(configuration.script),
-            "--environment-manifest",
-            str(report),
-        ],
-        env=clean_environment(root),
-        cwd=installation,
-        check=True,
-    )
-    manifest = setup.read_installed_manifest(configuration.manifest)
-    observed = setup.artifacts.ENVIRONMENT_ADAPTER.validate_json(report.read_bytes(), strict=True)
-    if observed != manifest.environment:
-        invalid("Portable worker's actual environment differs from its receipt")
-    return configuration, interpreter
+
+    if not is_production_worker(configuration):
+        invalid("Portable BeatThis requires the production ONNX worker; run the installer")
+    info = physical(executable).stat()
+    if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= WORKER_EXE_LIMIT:
+        invalid("Invalid Portable BeatThis Release executable")
+    if digest(executable) != configuration.executable_sha256:
+        invalid("Portable BeatThis worker differs from this Release; run the installer")
+    require_native_worker_capability(configuration, engine_type=engine_type)
 
 
-def selected_profile(install_root, setup):
-    try:
-        pointer = read_json(install_root / "current.json")
-        if not re.fullmatch(r"installation-[0-9a-f]{32}", pointer["directory"]):
-            invalid("Invalid selected worker directory")
-        manifest = physical(install_root / pointer["directory"] / "manifest.json", install_root)
-        if digest(manifest) != pointer["manifest_sha256"]:
-            invalid("Selected worker manifest changed")
-        return getattr(setup.read_installed_manifest(manifest), "profile", "legacy-cpu-v1")
-    except OSError, ValueError, KeyError:
-        return "legacy-cpu-v1"
+def load_verified_selection(
+    install_root: Path, scratch: Path, executable: Path, *, engine_type: object | None = None
+) -> NativeWorkerConfiguration:
+    """Verify the current pointer, provider package, and release identity without inference."""
+    from flitzis_looper.analysis.native_provisioning import load_production_worker  # noqa: PLC0415
+
+    physical(install_root / "current.json", install_root)
+    configuration = load_production_worker(install_root, scratch)
+    verify_release_worker(configuration, executable, engine_type=engine_type)
+    return configuration
 
 
-def provision_environment(installation, uv, base, root):
-    environment = clean_environment(root)
-    environment["UV_PROJECT_ENVIRONMENT"] = str(installation / ".venv")
-    subprocess.run(
-        [
-            str(uv),
-            "sync",
-            "--project",
-            str(installation),
-            "--python",
-            str(base),
-            "--locked",
-            "--no-dev",
-            "--no-editable",
-        ],
-        cwd=installation,
-        env=environment,
-        check=True,
-    )
-    materialize_python(base, installation / ".venv", root)
-
-
-def stage_installation(args, root, checkout, setup, scratch, profile):
-    if any(value is None for value in (args.uv, args.base_python, args.checkpoint)):
-        invalid("Worker repair requires its private uv/Python and pinned checkpoint")
-    uv, base, checkpoint = (
-        physical(value, root) for value in (args.uv, args.base_python, args.checkpoint)
-    )
-    artifact = setup.artifacts.ACCEPTED_ARTIFACT
-    if checkpoint.stat().st_size != artifact.size_bytes or digest(checkpoint) != artifact.sha256:
-        invalid("Pinned Portable BeatThis checkpoint mismatch")
-    installation = root / "analysis-runtime/beat-this" / ("installation-" + uuid4().hex)
-    installation.mkdir(parents=True)
-    source = (
-        setup.cuda_source_directory()
-        if profile == "cuda-auto-v2"
-        else setup.artifacts.worker_source_directory()
-    )
-    names = setup.CUDA_WORKER_FILES if profile == "cuda-auto-v2" else setup.artifacts.WORKER_FILES
-    for name in names:
-        shutil.copyfile(physical(source / name, checkout), installation / name)
-    shutil.copyfile(checkpoint, installation / "final0.ckpt")
-    provision_environment(installation, uv, base, root)
-    with (scratch / ("inspect-" + uuid4().hex + ".log")).open("xb") as log:
-        setup._inspect_environment(installation, log)
-    if profile == "cuda-auto-v2":
-        setup._record_cuda_installation(installation)
-    else:
-        setup._record_installation(installation)
-    return verified_installation(root, installation, setup, scratch)
-
-
-def parse_arguments(argv):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--checkout", required=True, type=Path)
-    parser.add_argument("--runtime", required=True, type=Path)
-    parser.add_argument("--mode", required=True, choices=("metadata", "stage", "check"))
-    parser.add_argument("--report-json", type=Path)
-    parser.add_argument("--uv", type=Path)
-    parser.add_argument("--base-python", type=Path)
-    parser.add_argument("--checkpoint", type=Path)
-    return parser.parse_args(argv)
-
-
-def worker_result(configuration, profile, interpreter):
+def worker_result(
+    configuration: NativeWorkerConfiguration, cache_status: dict[str, object]
+) -> dict[str, object]:
+    """Keep the journal's pointer contract and report actual preparation status."""
     pointer = {
         "schema_version": 1,
         "directory": configuration.manifest.parent.name,
@@ -328,52 +113,67 @@ def worker_result(configuration, profile, interpreter):
     payload = (json.dumps(pointer, indent=2) + "\n").encode("utf-8")
     return {
         "portable_analysis": "passed",
-        "profile": profile,
+        "execution_policy": configuration.execution_policy,
         "directory": configuration.manifest.parent.name,
         "pointer_bytes": base64.b64encode(payload).decode("ascii"),
-        "interpreter": interpreter,
-        "inference_executed": False,
+        "cuda_cache": cache_status,
+        "inference_executed": cache_status.get("warmup_executed", False),
     }
 
 
-def main(argv=None) -> int:
-    args = parse_arguments(argv)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--checkout", required=True, type=Path)
+    parser.add_argument("--runtime", required=True, type=Path)
+    parser.add_argument("--mode", required=True, choices=("stage", "check", "bundle"))
+    parser.add_argument("--report-json", type=Path)
+    parser.add_argument("--asset-cache", type=Path)
+    args = parser.parse_args(argv)
+    if args.asset_cache and args.mode != "bundle":
+        parser.error("A separate acquisition cache is only supported when preparing a bundle")
+
     root = physical(args.root)
     checkout, runtime = physical(args.checkout, root), physical(args.runtime, root)
     handles = configure(root, checkout, runtime)
-    from flitzis_looper.analysis import setup  # noqa: PLC0415
+    from flitzis_looper.analysis.beat_cuda_cache import (  # noqa: PLC0415
+        cuda_cache_status,
+        ensure_cuda_cache,
+    )
+    from flitzis_looper.analysis.native_provisioning import stage_production_worker  # noqa: PLC0415
 
-    if args.mode == "metadata":
-        sys.stdout.write(
-            json.dumps({
-                "url": setup.artifacts.ACCEPTED_ARTIFACT.source_url,
-                "sha256": setup.artifacts.ACCEPTED_ARTIFACT.sha256,
-                "bytes": setup.artifacts.ACCEPTED_ARTIFACT.size_bytes,
-                "python": "3.12.13",
-            })
-            + "\n"
-        )
-        return 0
     scratch = physical(root / "cache/analysis", root)
-    scratch.mkdir(parents=True, exist_ok=True)
     install_root = physical(root / "analysis-runtime/beat-this", root)
-    profile = selected_profile(install_root, setup)
-    try:
-        current = setup.load_worker_configuration(install_root, scratch)
-        configuration, interpreter = verified_installation(
-            root, current.manifest.parent, setup, scratch
+    physical(install_root / "current.json", install_root)
+    executable = physical(runtime / WORKER_EXECUTABLE, runtime)
+    if args.mode == "check":
+        configuration = load_verified_selection(install_root, scratch, executable)
+        cache_status = cuda_cache_status(configuration)
+    else:
+        bundle = args.mode == "bundle"
+        configuration = stage_production_worker(
+            install_root,
+            scratch,
+            repository=checkout,
+            executable=executable,
+            crt_dir=checkout / "src/flitzis_looper_audio",
+            include_cuda=True if bundle else None,
+            asset_cache=physical(args.asset_cache, root.parent) if args.asset_cache else None,
         )
-    except OSError, ValueError, RuntimeError, subprocess.SubprocessError:
-        if args.mode == "check":
-            raise
-        configuration, interpreter = stage_installation(
-            args, root, checkout, setup, scratch, profile
+        verify_release_worker(configuration, executable)
+        cache_status = (
+            {"status": "pending", "detail": "CUDA preparation belongs to the target installation"}
+            if bundle
+            else ensure_cuda_cache(configuration, retry_failed=True)
         )
-    result = worker_result(configuration, profile, interpreter)
+        if not bundle and cache_status["status"] not in {"ready", "unavailable"}:
+            message = f"CUDA preparation {cache_status['status']}: {cache_status.get('detail', '')}"
+            raise ValueError(message)
+    result = worker_result(configuration, cache_status)
     if args.report_json is not None:
         write_new_json(physical(args.report_json, root / "cache"), result)
     sys.stdout.write(json.dumps(result, indent=2) + "\n")
-    assert handles is not None
+    assert handles
     return 0
 
 

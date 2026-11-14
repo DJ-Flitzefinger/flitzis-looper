@@ -1,4 +1,4 @@
-"""Prepare or check required source-clone BPM resources without App/device/inference."""
+"""Prepare or check source-clone BPM resources and the Windows CUDA cache."""
 
 # Public command filename follows the repository's existing hyphenated CLI convention.
 # ruff: noqa: N999
@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,11 @@ from flitzis_looper.analysis.native_beat_worker import (
     require_native_worker_capability,
     verify_native_package,
 )
+from flitzis_looper.analysis.native_provisioning import (
+    build_native_worker,
+    load_production_worker,
+    stage_production_worker,
+)
 from flitzis_looper.analysis.worker import WorkerConfiguration
 from flitzis_looper.controller import bs_roformer_assets
 from flitzis_looper.controller.model_pins import DEMUCS_ASSETS
@@ -33,6 +39,7 @@ from flitzis_looper.controller.stem_generation import (
 )
 
 if TYPE_CHECKING:
+    from flitzis_looper.analysis.beat_cuda_cache import CudaCacheStatus
     from flitzis_looper.analysis.cuda_artifacts import WorkerProfile
 
 
@@ -175,6 +182,36 @@ def prepare_worker(
     return configuration
 
 
+def production_windows() -> bool:
+    return sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}
+
+
+def prepare_windows_worker(
+    repository: Path, install_root: Path, scratch: Path, *, check: bool
+) -> tuple[NativeWorkerConfiguration, CudaCacheStatus]:
+    """Select the verified ONNX package and prepare CUDA on setup or repair."""
+    from flitzis_looper.analysis.beat_cuda_cache import (  # noqa: PLC0415
+        cuda_cache_status,
+        ensure_cuda_cache,
+    )
+
+    if check:
+        configuration = load_production_worker(install_root, scratch)
+        require_native_worker_capability(configuration)
+        return configuration, cuda_cache_status(configuration)
+    executable = build_native_worker(repository, scratch)
+    configuration = stage_production_worker(install_root, scratch, repository, executable)
+    require_native_worker_capability(configuration)
+    status = ensure_cuda_cache(configuration, retry_failed=True)
+    if status["status"] not in {"ready", "unavailable"}:
+        raise RuntimeError(status["detail"])
+    selected = setup.activate_worker_installation(
+        install_root, configuration.manifest.parent, scratch
+    )
+    assert isinstance(selected, NativeWorkerConfiguration)
+    return selected, status
+
+
 def verify_asset(path: Path, checksum: str, size: int) -> None:
     with path.open("rb") as stream:
         actual = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -231,12 +268,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         worker_root = owned_directory(root, "models/beat-this")
         scratch = owned_directory(root, ".cache/runtime-setup")
-        configuration = prepare_worker(
-            worker_root,
-            scratch,
-            check=options.check,
-            profile=cast("WorkerProfile | None", options.profile),
-        )
+        cuda_cache = None
+        configuration: setup.InstalledWorkerConfiguration
+        if production_windows():
+            require(condition=options.profile is None, message="Windows BPM uses the ONNX worker")
+            configuration, cuda_cache = prepare_windows_worker(
+                root, worker_root, scratch, check=options.check
+            )
+        else:
+            configuration = prepare_worker(
+                worker_root,
+                scratch,
+                check=options.check,
+                profile=cast("WorkerProfile | None", options.profile),
+            )
         if options.with_stems:
             prepare_stems(root, check=options.check)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
@@ -247,7 +292,8 @@ def main(argv: list[str] | None = None) -> int:
             "source_runtime": "passed",
             "worker": str(configuration.manifest),
             "stems_checked": options.with_stems,
-            "inference_executed": False,
+            "inference_executed": bool(cuda_cache and cuda_cache["warmup_executed"]),
+            "cuda_cache": cuda_cache,
         })
         + "\n"
     )

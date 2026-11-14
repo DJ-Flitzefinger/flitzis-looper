@@ -13,21 +13,19 @@ selection in [app_tempo.rs](../../rust/crates/looper/src/audio_engine/app_tempo.
 An unconfigured native scientific caller uses the existing `analyze_sample`
 route; that is distinct from silently replacing failed configured neural work.
 
-The current model is pinned Beat This `final0`, minimal postprocessing, float32.
+Windows x64 uses the pinned dynamic Beat This `final0` ONNX graph in FP32 with
+the existing soxr HQ, log-mel, chunking and minimal postprocessing.
 [neural_analysis/raw.rs](../../rust/crates/looper/src/audio_engine/neural_analysis/raw.rs)
 binds request/model/input geometry. Python
 [neural_worker.py](../../src/flitzis_looper/analysis/neural_worker.py) verifies an
 existing installation and runs an isolated worker off the main/UI/audio thread.
-Analysis does not install or download models. [Worker setup](../model-worker-setup.md) describes the separate Python 3.12
-Torch environments and guarded Native CPU/CUDA packages. Fresh setup selects
-the pinned Torch CPU worker. The App bridge can use explicitly staged and
-activated Native packages with a matching extension.
+[Worker setup](../model-worker-setup.md) provisions the graph and the CPU/CUDA
+runtime. Analysis can prepare a stale CUDA cache using the installed package.
 
-CPU FP32 and CUDA-capable execution have distinct resource identities. The Torch
-CUDA profile can retry the same model on CPU. The explicit Native CUDA package
-requires its auto policy for a qualified CUDA inference fault to start a fresh
-CPU process with the same graph and source. Completed receipts distinguish
-actual device, fallback and unknown older provenance.
+ONNX Runtime 1.24.4 runs on a usable NVIDIA GPU or on CPU with the same graph.
+A qualified CUDA error can start one fresh CPU worker after CUDA and its readers
+retire. The result records the actual device and fallback reason. Inference
+failures can yield a rough BPM estimate with an empty grid and retained diagnostics.
 
 ## Complete-source preparation and admission
 
@@ -36,10 +34,10 @@ originals, decoder/playback identities and finite playback residency. Analysis
 preflights complete geometry before materializing its complete PCM input. It does
 not analyze only the visible loop or silently crop a long source.
 
-The 512 MiB preparation admission uses checked geometry and includes held
-interleaved source PCM, any extra held residency, bounded export/converter storage
-and a response/wire allowance. Mandatory BPM is admitted separately from optional
-Key. Export streams the complete engine-rate mono source into a sealed f32le
+Mandatory BPM preparation uses checked geometry, current host memory and fallible
+allocation for temporary buffers. The worker observes actual OS memory pressure.
+Key admission remains independent. Export streams the complete engine-rate mono
+source into a sealed f32le
 temporary file, binding extent and SHA256. Beat This and local Key work may overlap;
 the original sample and neural wire remain held and accounted. Dropping a cloned
 snapshot does not release another caller's retained source.

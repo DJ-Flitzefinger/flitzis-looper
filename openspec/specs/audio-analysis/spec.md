@@ -6,16 +6,17 @@ To define background audio analysis for BPM, key, beat grid, and downbeat metada
 
 ### Requirement: Primary BPM and optional key have independent admission
 Configured primary-neural analysis SHALL admit full-source BPM independently of
-optional key work at every pre-read and execution gate, retaining512MiB and all
-source/request/cancellation/publication guards. Optional concurrent key admission
+optional key work at every pre-read and execution gate, with checked geometry,
+available host capacity and source/request/cancellation/publication guards.
+Optional concurrent key admission
 SHALL include the caller's retained interleaved PCM, additional held storage,
 concurrent wire storage, bounded conversion/I/O buffers, FFT/Sinc workspace and
 retained CQT responses/frontend. Complete Key PCM and octave signals SHALL use
 job-owned file storage with bounded reads rather than whole-track widening or
-octave heaps. The512MiB preparation allocation cap is not a process-tree RSS or
-OS file-cache guarantee. The KeyNet call owns its model session and session arenas;
+octave heaps. The KeyNet 512 MiB preparation budget has its own scope. The
+KeyNet call owns its model session and session arenas;
 ORT process-wide resources have their own lifetime.
-No source cropping or limit increase SHALL substitute for independent admission.
+The primary path SHALL process the complete source.
 Both current loader DTO routes SHALL keep the required key string and explicit
 key_status ready/skipped_budget/not_requested/failed plus available key_error.
 An actual completed unknown classification SHALL remain distinct from skipped work.

@@ -8,7 +8,7 @@ fn empty() -> Value {
         "mono_sha256":"c".repeat(64),"sample_rate_hz":8000,"frame_count":80000})
 }
 
-fn clicks(rate: u32, bpm: f64, seconds: usize) -> SampleBuffer {
+fn clicks(rate: u32, bpm: f64, seconds: usize) -> CompletePcm<'static> {
     let mut samples = vec![0.0_f32; rate as usize * seconds * 2];
     let count = (seconds as f64 * bpm / 60.0) as usize;
     for beat in 0..count {
@@ -18,10 +18,9 @@ fn clicks(rate: u32, bpm: f64, seconds: usize) -> SampleBuffer {
             samples[frame * 2 + 1] = -0.5;
         }
     }
-    SampleBuffer {
+    CompletePcm {
         channels: 2,
         samples: samples.into(),
-        residency: None,
     }
 }
 
@@ -41,7 +40,6 @@ fn approximate_reuses_rejected_period_without_relabelling_precision() {
         None,
         &base.to_string(),
         "QM same-period agreement failed",
-        0,
         &|| false,
     )
     .unwrap();
@@ -56,15 +54,7 @@ fn approximate_reuses_rejected_period_without_relabelling_precision() {
     assert!(method.get("execution").is_none());
     let range = BpmRange::configured(true, 100.0, 140.0).unwrap();
     assert!(matches!(
-        attempt(
-            &sample,
-            8000,
-            range,
-            &base.to_string(),
-            "failed",
-            0,
-            &|| false
-        ),
+        attempt(&sample, 8000, range, &base.to_string(), "failed", &|| false),
         Err(Failure::NoChoice)
     ));
 }
@@ -97,7 +87,6 @@ fn bounded_energy_supports_fractional_tempo_rates_and_opposite_stereo() {
                 None,
                 &base.to_string(),
                 "inference unavailable",
-                0,
                 &|| false,
             )
             .unwrap();
@@ -128,10 +117,9 @@ fn stationary_tones_and_noise_do_not_supply_rhythm() {
                         as f32
                 })
                 .collect();
-            let sample = SampleBuffer {
+            let sample = CompletePcm {
                 channels: 1,
                 samples: samples.into(),
-                residency: None,
             };
             assert!(
                 energy(&sample, rate, &|| false).unwrap().is_none(),
@@ -148,10 +136,9 @@ fn stationary_tones_and_noise_do_not_supply_rhythm() {
             (f64::from(seed) / f64::from(u32::MAX) - 0.5) as f32
         })
         .collect();
-    let sample = SampleBuffer {
+    let sample = CompletePcm {
         channels: 1,
         samples: samples.into(),
-        residency: None,
     };
     assert!(energy(&sample, 48000, &|| false).unwrap().is_none());
 }
@@ -174,7 +161,6 @@ fn source_windows_cover_quiet_intro_and_nearly_tied_different_tempos() {
         None,
         &base.to_string(),
         "inference unavailable",
-        0,
         &|| false,
     )
     .unwrap();
@@ -207,7 +193,6 @@ fn replay_saved_and_interval_packets_through_native_wrapper() {
             None,
             &original,
             "Original precise refusal retained",
-            0,
             &|| false,
         )
         .unwrap();
@@ -218,10 +203,9 @@ fn replay_saved_and_interval_packets_through_native_wrapper() {
 #[test]
 fn unusable_corrupt_cancelled_and_unadmitted_sources_never_invent_tempo() {
     for value in [0.0_f32, 0.5, f32::NAN, f32::INFINITY] {
-        let sample = SampleBuffer {
+        let sample = CompletePcm {
             channels: 1,
             samples: vec![value; 80000].into(),
-            residency: None,
         };
         assert!(energy(&sample, 8000, &|| false).unwrap().is_none());
     }
@@ -229,29 +213,20 @@ fn unusable_corrupt_cancelled_and_unadmitted_sources_never_invent_tempo() {
     assert!(energy(&short, 8000, &|| false).unwrap().is_none());
     let sample = clicks(8000, 120.0, 10);
     assert!(matches!(
-        attempt(
-            &sample,
-            8000,
-            None,
-            &empty().to_string(),
-            "failed",
-            0,
-            &|| true
-        ),
+        attempt(&sample, 8000, None, &empty().to_string(), "failed", &|| {
+            true
+        }),
         Err(Failure::Cancelled)
     ));
-    assert!(matches!(
-        attempt(
-            &sample,
-            8000,
-            None,
-            &empty().to_string(),
-            "failed",
-            LIMIT,
-            &|| false
-        ),
-        Err(Failure::Unavailable(_))
-    ));
+    let refused = TEST_WORKSPACE_CEILING.with(|ceiling| {
+        ceiling.set(Some(0));
+        let result = attempt(&sample, 8000, None, &empty().to_string(), "failed", &|| {
+            false
+        });
+        ceiling.set(None);
+        result
+    });
+    assert!(matches!(refused, Err(Failure::Unavailable(_))));
     let calls = std::cell::Cell::new(0);
     let cancel = || {
         calls.set(calls.get() + 1);

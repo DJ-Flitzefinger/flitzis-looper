@@ -329,13 +329,13 @@ def test_vendored_wheel_must_match_source_even_at_same_version(
     ("kind", "owner", "check", "expected"),
     [
         ("candidate", True, False, "Run START-LOOPER.bat --check"),
-        ("candidate", True, True, "True True True False"),
+        ("candidate", True, True, "True True False False"),
         ("candidate", False, True, "owner does not match"),
         ("main", True, True, "owner does not match"),
         ("main", False, True, "True False False True"),
     ],
 )
-def test_candidate_dispatch_uses_build_preflight_only(
+def test_candidate_dispatch_checks_runtime_without_launching_app(
     tmp_path: Path, kind: str, *, owner: bool, check: bool, expected: str
 ) -> None:
     script = Path(__file__).resolve().parents[2] / "scripts/portable/dispatch.ps1"

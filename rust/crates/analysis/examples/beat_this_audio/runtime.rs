@@ -23,6 +23,22 @@ pub const PACKAGE_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE";
 pub const PACKAGE_DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE_SHA256";
 pub const LOAD_POLICY_ENV: &str = "FLITZIS_TRIAL_ORT_LOAD_POLICY";
 
+/// Retain the app-local redistributables before loading the pinned audio and ORT DLLs.
+#[cfg(all(windows, feature = "native-beat-this-worker"))]
+pub fn load_worker_crt(
+    root: &Path,
+    context: &Context,
+) -> Result<Vec<flitzis_looper_analysis::trial_lifetime::OwnedLibrary>, String> {
+    let Some(requested) = std::env::var_os("FLITZIS_BEAT_THIS_CRT") else {
+        return Ok(Vec::new());
+    };
+    let directory = root.join("crt");
+    if !directory.is_absolute() || Path::new(&requested) != directory.as_path() {
+        return Err("BeatThis CRT requires its own absolute package directory".into());
+    }
+    loader::load_worker_crt(&directory, context)
+}
+
 pub fn package_requested() -> bool {
     std::env::var_os(PACKAGE_ENV).is_some()
         || std::env::var_os(PACKAGE_DIGEST_ENV).is_some()

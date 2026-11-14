@@ -57,35 +57,48 @@ impl LoadedPcmSnapshot {
             max_working_bytes,
             "source and export chunk bytes",
         )?;
-        let mut bytes = [0_u8; IO_CHUNK_BYTES];
-        for chunk in self
-            .sample
-            .samples
-            .chunks(CHUNK_FRAMES * self.sample.channels)
-        {
-            check_cancelled(cancelled)?;
-            let frames = chunk.len() / self.sample.channels;
-            for (frame, destination) in chunk
-                .chunks_exact(self.sample.channels)
-                .zip(bytes.chunks_exact_mut(size_of::<f32>()))
-            {
-                let mut sum = 0.0_f64;
-                for value in frame {
-                    if !value.is_finite() {
-                        return Err(PcmError::InvalidInput("non-finite loaded sample"));
-                    }
-                    sum += f64::from(*value);
-                }
-                let mono = (sum / self.sample.channels as f64) as f32;
-                destination.copy_from_slice(&mono.to_le_bytes());
-            }
-            output.write_all(&bytes[..frames * size_of::<f32>()])?;
-        }
-        check_cancelled(cancelled)?;
-        output.flush()?;
-        check_cancelled(cancelled)?;
-        Ok(export_bytes)
+        stream_complete_f32_le(
+            &self.sample.samples,
+            self.sample.channels,
+            output,
+            cancelled,
+        )
     }
+}
+
+pub(in crate::audio_engine) fn stream_complete_f32_le(
+    samples: &[f32],
+    channels: usize,
+    output: &mut impl Write,
+    cancelled: &impl Fn() -> bool,
+) -> Result<usize, PcmError> {
+    if !(1..=super::MAX_CHANNELS).contains(&channels)
+        || samples.is_empty()
+        || !samples.len().is_multiple_of(channels)
+    {
+        return Err(PcmError::InvalidInput("incomplete interleaved source"));
+    }
+    let export_bytes = pcm_bytes(samples.len() / channels)?;
+    let mut bytes = [0_u8; IO_CHUNK_BYTES];
+    for chunk in samples.chunks(CHUNK_FRAMES * channels) {
+        check_cancelled(cancelled)?;
+        for (frame, destination) in chunk.chunks_exact(channels).zip(bytes.chunks_exact_mut(4)) {
+            let mut sum = 0.0_f64;
+            for value in frame {
+                if !value.is_finite() {
+                    return Err(PcmError::InvalidInput("non-finite loaded sample"));
+                }
+                sum += f64::from(*value);
+            }
+            let mono = (sum / channels as f64) as f32;
+            destination.copy_from_slice(&mono.to_le_bytes());
+        }
+        output.write_all(&bytes[..chunk.len() / channels * size_of::<f32>()])?;
+    }
+    check_cancelled(cancelled)?;
+    output.flush()?;
+    check_cancelled(cancelled)?;
+    Ok(export_bytes)
 }
 
 fn add_bytes(left: usize, right: usize) -> Result<usize, PcmError> {

@@ -393,6 +393,26 @@ impl CommittedColdLease {
         })
     }
 
+    pub(in crate::audio_engine) fn read_complete_analysis_pcm(
+        &self,
+        reference: &SampleBuffer,
+        cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<crate::audio_engine::analysis_pcm::CompletePcm<'static>> {
+        let mut reader = self.open_complete_reader(reference)?;
+        let channels = reference.channels;
+        let samples = warm::read_analysis_pcm(
+            &mut reader,
+            reference.frame_count(),
+            channels,
+            cancelled,
+            &mut IntegrityMetrics::default(),
+        )?;
+        Ok(crate::audio_engine::analysis_pcm::CompletePcm {
+            samples: std::borrow::Cow::Owned(samples),
+            channels,
+        })
+    }
+
     #[cfg(test)]
     pub(in crate::audio_engine) fn live_cached_pcm_samples(&self) -> Option<usize> {
         self.cache

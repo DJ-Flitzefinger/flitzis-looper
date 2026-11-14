@@ -95,6 +95,30 @@ impl Fixture {
 }
 
 #[test]
+fn complete_bpm_preparation_preserves_full_pcm_outside_resident_selection() {
+    let full_pcm: Vec<f32> = (0..1024).map(|index| index as f32 / 1024.0).collect();
+    let fixture = Fixture::new(full_pcm.clone(), 8_000, 2);
+    let mut transaction = fixture.prepare();
+    let complete = transaction.read_prepared_analysis_pcm(&|| false).unwrap();
+    assert_eq!(&*complete.samples, &full_pcm);
+    let selected = transaction
+        .read_prepared_selection(fixture.hint(17, 41), PCM_LIMIT_BYTES, &|| false)
+        .unwrap();
+    assert_eq!(&*selected.samples, &full_pcm[34..82]);
+    let lease = fixture.commit(transaction, &selected);
+    let complete = lease
+        .read_complete_analysis_pcm(&selected, &|| false)
+        .unwrap();
+    assert_eq!(&*complete.samples, &full_pcm);
+    assert!(
+        lease
+            .read_complete_analysis_pcm(&selected, &|| true)
+            .is_err()
+    );
+    assert!(lease.live_cached_pcm_samples().is_none());
+}
+
+#[test]
 fn prepared_equal_finite_selections_share_pcm_with_fresh_views_and_complete_verification() {
     let fixture = Fixture::new(vec![0.125; 1024], 8_000, 2);
     let mut first = fixture.prepare();

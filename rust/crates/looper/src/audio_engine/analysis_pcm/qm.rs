@@ -1,8 +1,8 @@
 //! Optional BPM-only preparation on the same protected complete playback PCM.
 use super::{
-    PcmError, check_cancelled, default::normal_mean, fft, resample_mono_cancellable, validate_rate,
+    CompletePcm, PcmError, check_cancelled, default::normal_mean, fft, resample_mono_cancellable,
+    validate_rate,
 };
-use crate::messages::SampleBuffer;
 use sha2::{Digest, Sha256};
 
 const FIXED: usize = 1024 * 1024;
@@ -46,28 +46,8 @@ fn reserve<T>(n: usize) -> Result<Vec<T>, PcmError> {
     Ok(values)
 }
 
-/// `available` excludes every caller-owned source, raw capture and base method.
-/// The normal scientific path keeps its existing CQT-inclusive admission.
-pub(in crate::audio_engine) fn prepare_qm_input(
-    sample: &SampleBuffer,
-    rate: u32,
-    verified_nn_mono: &str,
-    available: usize,
-    cancelled: &impl Fn() -> bool,
-) -> Result<QmPcm, PcmError> {
-    check_cancelled(cancelled)?;
+fn plan(frames: usize, rate: u32) -> Result<(usize, usize, usize, usize, usize), PcmError> {
     validate_rate(rate)?;
-    if !matches!(sample.channels, 1 | 2)
-        || sample.samples.is_empty()
-        || !sample.samples.len().is_multiple_of(sample.channels)
-        || sample.resident_start() != 0
-        || sample.resident_end() != sample.frame_count()
-    {
-        return Err(PcmError::InvalidInput(
-            "QM requires complete mono or stereo playback",
-        ));
-    }
-    let frames = sample.samples.len() / sample.channels;
     let output = usize::try_from((frames as u128 * 44_100).div_ceil(u128::from(rate)))
         .map_err(|_| PcmError::Limit("QM output extent"))?;
     let (input_fft, output_fft) = if rate == 44_100 {
@@ -86,15 +66,57 @@ pub(in crate::audio_engine) fn prepare_qm_input(
     ])?;
     let converted_bytes = bytes::<f32>(converted_capacity)?;
     let mono_bytes = bytes::<f32>(frames)?;
-    let converter_peak = if rate == 44_100 {
-        admit(&[mono_bytes], available)?
-    } else {
-        admit(&[mono_bytes, converted_bytes, fft_bytes], available)?
-    };
-    let widening_bound = admit(&[converted_bytes, bytes::<f64>(output)?], available)?;
     let qm_working_bytes = flitzis_looper_analysis::default_bpm_working_bytes(output)
         .ok_or(PcmError::Limit("QM workspace extent"))?;
-    let inference_bound = admit(&[bytes::<f64>(output)?, qm_working_bytes], available)?;
+    let converter_peak = sum(&[
+        mono_bytes,
+        if rate == 44_100 { 0 } else { converted_bytes },
+        fft_bytes,
+    ])?;
+    let widening_bound = sum(&[converted_bytes, bytes::<f64>(output)?])?;
+    let inference_bound = sum(&[bytes::<f64>(output)?, qm_working_bytes])?;
+    let peak = sum(&[
+        converter_peak.max(widening_bound).max(inference_bound),
+        FIXED,
+    ])?;
+    Ok((
+        output,
+        fft_bytes,
+        converted_capacity,
+        qm_working_bytes,
+        peak,
+    ))
+}
+
+pub(in crate::audio_engine) fn qm_working_bytes(
+    frames: usize,
+    rate: u32,
+) -> Result<usize, PcmError> {
+    Ok(plan(frames, rate)?.4)
+}
+
+/// `available` is the executing stage's reservation for prospective workspace.
+pub(in crate::audio_engine) fn prepare_qm_input(
+    sample: &CompletePcm<'_>,
+    rate: u32,
+    verified_nn_mono: &str,
+    available: usize,
+    cancelled: &impl Fn() -> bool,
+) -> Result<QmPcm, PcmError> {
+    check_cancelled(cancelled)?;
+    if !matches!(sample.channels, 1 | 2)
+        || sample.samples.is_empty()
+        || !sample.samples.len().is_multiple_of(sample.channels)
+    {
+        return Err(PcmError::InvalidInput(
+            "QM requires complete mono or stereo playback",
+        ));
+    }
+    let frames = sample.frame_count();
+    let (output, fft_bytes, converted_capacity, qm_working_bytes, peak) = plan(frames, rate)?;
+    if peak > available {
+        return Err(PcmError::Limit("optional complete QM preparation"));
+    }
     let mut mono = reserve::<f32>(frames)?;
     let mut loaded_hash = Sha256::new();
     let mut normal_hash = Sha256::new();
@@ -168,11 +190,7 @@ pub(in crate::audio_engine) fn prepare_qm_input(
             "rubato-fft-1.0-44100-delay-trim-tail-flush-v1"
         },
         qm_working_bytes,
-        preparation_peak_bytes: converter_peak
-            .max(widening_bound)
-            .max(inference_bound)
-            .max(widening_peak)
-            .max(inference_peak),
+        preparation_peak_bytes: peak.max(widening_peak).max(inference_peak),
     })
 }
 

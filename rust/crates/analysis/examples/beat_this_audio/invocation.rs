@@ -58,8 +58,8 @@ impl Invocation {
                 if count == 0 {
                     break;
                 }
-                if raw.len() + count > limit {
-                    return Err("input changed beyond trial byte bound".into());
+                if raw.len() as u64 + count as u64 > extent {
+                    return Err("input grew beyond its admitted byte extent".into());
                 }
                 hash.update(&buffer[..count]);
                 raw.extend_from_slice(&buffer[..count]);
@@ -78,7 +78,10 @@ impl Invocation {
         if !raw.len().is_multiple_of(4) {
             return Err("invalid float32 byte extent".into());
         }
-        let mut values = Vec::with_capacity(raw.len() / 4);
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(raw.len() / 4)
+            .map_err(|error| format!("BeatThis PCM allocation failed: {error}"))?;
         for block in raw.chunks(65536) {
             self.context.check()?;
             for bytes in block.chunks_exact(4) {

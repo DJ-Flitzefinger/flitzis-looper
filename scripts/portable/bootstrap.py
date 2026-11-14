@@ -931,17 +931,13 @@ def check_bpm_only_runtime_api(native_module: object) -> None:
         assert not hasattr(engine, method), f"Native still exposes retired phase control: {method}"
 
 
-def check_beat_this_execution_api(engine_type: object, installation_root: Path) -> None:
-    """Only a selected CUDA profile requires the new Native execution protocol."""
+def check_beat_this_execution_api(
+    engine_type: object, installation_root: Path, runtime: Path | None = None
+) -> dict[str, object]:
+    """Check the selected Native package and its matching App and Release executable."""
     if not (installation_root / "current.json").is_file():
         message = "Portable BeatThis worker is missing; run the installer to repair it"
         raise RuntimeError(message)
-    execution = importlib.import_module("flitzis_looper.analysis.execution")
-    setup = importlib.import_module("flitzis_looper.analysis.setup")
-    configuration = setup.load_worker_configuration(installation_root, installation_root.parent)
-    setup.load_staged_worker_configuration(
-        installation_root, configuration.manifest.parent, installation_root.parent
-    )
     helper_path = Path(__file__).with_name("prepare_analysis.py")
     if not helper_path.is_file():
         message = "Portable analysis verification helper is missing"
@@ -949,11 +945,24 @@ def check_beat_this_execution_api(engine_type: object, installation_root: Path) 
     specification = importlib.util.spec_from_file_location(
         "portable_analysis_verification", helper_path
     )
+    assert specification is not None
+    assert specification.loader is not None
     helper = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(helper)
-    helper.verify_python(configuration.manifest.parent / ".venv", installation_root.parents[1])
-    if isinstance(configuration.model, execution.CudaBeatModelIdentity):
-        execution.require_cuda_native_capability(engine_type)
+    installation_root = helper.physical(installation_root, installation_root.parents[1])
+
+    runtime = runtime or installation_root.parents[1] / "Runtime"
+    executable = helper.physical(runtime / helper.WORKER_EXECUTABLE, runtime)
+    configuration = helper.load_verified_selection(
+        installation_root, installation_root.parent, executable, engine_type=engine_type
+    )
+    cache = importlib.import_module("flitzis_looper.analysis.beat_cuda_cache")
+    return {
+        "worker": str(configuration.manifest),
+        "execution_policy": configuration.execution_policy,
+        "cuda_cache": cache.cuda_cache_status(configuration),
+        "inference_executed": False,
+    }
 
 
 def check_runtime(
@@ -976,10 +985,13 @@ def check_runtime(
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
     check_bpm_only_runtime_api(native_module)
-    if require_analysis:
+    analysis = (
         check_beat_this_execution_api(
-            native_module.AudioEngine, root / "analysis-runtime" / "beat-this"
+            native_module.AudioEngine, root / "analysis-runtime/beat-this", runtime
         )
+        if require_analysis
+        else None
+    )
     check_ordinary_transport_api(native_module)
     check_audio_output_api(native_module)
     check_stem_conversion_api(native_module)
@@ -1037,6 +1049,7 @@ def check_runtime(
         json.dumps({
             "portable_preflight": "passed",
             "analysis_checked": require_analysis,
+            "analysis": analysis,
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
