@@ -11,6 +11,3 @@ authorization and applicable [OpenSpec contracts](../openspec/specs/).
   CPU fallback, complete source and quality parity, and the shipping packages
   before retiring Torch. Once verified, remove the plan, resolve this item and
   update the architecture and setup guides.
-- [ ] **Optionally reduce exact six-PAD processing cost further.** Preserve
-  source coordinates, rounding, ownership and realtime guards if this
-  investigation is taken up.
