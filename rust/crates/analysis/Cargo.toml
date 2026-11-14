@@ -11,6 +11,7 @@ native-inference-trial = ["dep:libloading"]
 native-inference-dynamic = ["native-inference-trial", "ort/load-dynamic"]
 native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
 native-beat-this-worker = ["native-inference-cuda", "dep:serde", "dep:serde_json"]
+native-bs-roformer-worker = ["native-inference-cuda", "dep:flitzis-stem-dsp", "dep:serde", "dep:serde_json"]
 demucs-inference-trial = ["native-inference-trial", "dep:flitzis-stem-dsp"]
 native-demucs-worker = ["demucs-inference-trial", "native-inference-dynamic", "dep:serde", "dep:serde_json"]
 
@@ -39,6 +40,11 @@ required-features = ["native-beat-this-worker"]
 name = "native-htdemucs-worker"
 path = "src/demucs_worker.rs"
 required-features = ["native-demucs-worker"]
+
+[[bin]]
+name = "native-bs-roformer-worker"
+path = "src/bs_worker.rs"
+required-features = ["native-bs-roformer-worker"]
 
 [dependencies]
 flitzis-stem-dsp = { path = "../stem-dsp", optional = true }

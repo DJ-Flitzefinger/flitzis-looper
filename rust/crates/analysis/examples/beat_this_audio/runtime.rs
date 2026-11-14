@@ -24,7 +24,13 @@ pub const PACKAGE_DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE_SHA256";
 pub const LOAD_POLICY_ENV: &str = "FLITZIS_TRIAL_ORT_LOAD_POLICY";
 
 /// Retain the app-local redistributables before loading the pinned audio and ORT DLLs.
-#[cfg(all(windows, feature = "native-beat-this-worker"))]
+#[cfg(all(
+    windows,
+    any(
+        feature = "native-beat-this-worker",
+        feature = "native-bs-roformer-worker"
+    )
+))]
 pub fn load_worker_crt(
     root: &Path,
     context: &Context,

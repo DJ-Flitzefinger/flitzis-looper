@@ -328,15 +328,24 @@ def prepare_native_package(
         crt = crt_dir if crt_dir is not None else _visual_cpp_runtime()
         for name in CRT_DLLS:
             shutil.copyfile(crt / name, package / "crt" / name)
-        _extract_members(
-            _ORT_CPU.acquire(cache, offline=offline),
-            "onnxruntime/capi/",
-            package,
-            {name: pin for name, pin in _SOURCE_ASSETS.items() if name.startswith("ort/")},
+        provision_ort_runtime(
+            repository, package, cache, offline=offline, include_cuda=include_cuda
         )
-        if include_cuda:
-            _prepare_cuda_package(repository, package, cache, offline=offline)
         yield package
+
+
+def provision_ort_runtime(
+    repository: Path, package: Path, cache: Path, *, offline: bool, include_cuda: bool
+) -> None:
+    """Acquire the pinned shared CPU and optional CUDA ORT DLL closure."""
+    _extract_members(
+        _ORT_CPU.acquire(cache, offline=offline),
+        "onnxruntime/capi/",
+        package,
+        {name: pin for name, pin in _SOURCE_ASSETS.items() if name.startswith("ort/")},
+    )
+    if include_cuda:
+        _prepare_cuda_package(repository, package, cache, offline=offline)
 
 
 def _prepare_cuda_package(repository: Path, package: Path, cache: Path, *, offline: bool) -> None:

@@ -29,6 +29,12 @@ from flitzis_looper.analysis.native_provisioning import (
     stage_production_worker,
 )
 from flitzis_looper.analysis.worker import WorkerConfiguration
+from flitzis_looper.bs_onnx_installation import BS_ONNX_MODELS_DIRECTORY
+from flitzis_looper.bs_onnx_provisioning import (
+    build_bs_onnx_worker,
+    select_bs_onnx_installation,
+    stage_bs_onnx_installation,
+)
 from flitzis_looper.controller import bs_roformer_assets
 from flitzis_looper.controller.model_pins import DEMUCS_ASSETS
 from flitzis_looper.controller.stem_generation import (
@@ -41,6 +47,7 @@ from flitzis_looper.controller.stem_generation import (
 if TYPE_CHECKING:
     from flitzis_looper.analysis.beat_cuda_cache import CudaCacheStatus
     from flitzis_looper.analysis.cuda_artifacts import WorkerProfile
+    from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
 
 
 def require(*, condition: bool, message: str) -> None:
@@ -220,8 +227,8 @@ def verify_asset(path: Path, checksum: str, size: int) -> None:
         raise ValueError(message)
 
 
-def prepare_stems(root: Path, *, check: bool) -> None:
-    """Acquire full pins explicitly, then run existing fresh CPU checks with networking denied."""
+def prepare_stems(root: Path, *, check: bool) -> BsCudaCacheStatus | None:
+    """Verify pinned Stem resources and report CUDA work done by this setup."""
     cache = default_demucs_model_cache_dir(project_root=root)
     for filename in DEMUCS_REQUIRED_CHECKPOINTS["htdemucs"]:
         size, checksum, url = DEMUCS_ASSETS[filename]
@@ -234,6 +241,10 @@ def prepare_stems(root: Path, *, check: bool) -> None:
         bs_roformer_assets.verify_model_assets(roformer)
     else:
         bs_roformer_assets.install_model_assets(roformer)
+    prepare_onnx = production_windows() and not check
+    guarded_check = (
+        ["--child-action", "load", "--separator", "demucs:htdemucs"] if prepare_onnx else []
+    )
     subprocess.run(
         [
             sys.executable,
@@ -247,11 +258,28 @@ def prepare_stems(root: Path, *, check: bool) -> None:
             "--mode",
             "check",
             "--source-clone",
+            *guarded_check,
         ],
         cwd=root,
         env=demucs_cache_environment(cache),
         check=True,
     )
+    if prepare_onnx:
+        scratch = owned_directory(root, ".cache/runtime-setup")
+        worker = build_bs_onnx_worker(root, scratch)
+        package_root = owned_directory(root, BS_ONNX_MODELS_DIRECTORY)
+        preparations: list[BsCudaCacheStatus] = []
+        installation = stage_bs_onnx_installation(
+            root,
+            package_root,
+            worker,
+            roformer,
+            scratch / "beat-this-downloads",
+            cuda_preparation=preparations.append,
+        )
+        select_bs_onnx_installation(package_root, installation)
+        return preparations[0]
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="Verify installed resources without downloads"
     )
     parser.add_argument(
-        "--with-stems", action="store_true", help="Also verify both optional Stem models on CPU"
+        "--with-stems", action="store_true", help="Also prepare or verify both optional Stem models"
     )
     parser.add_argument("--profile", choices=("legacy-cpu-v1", "cuda-auto-v2"))
     options = parser.parse_args(argv)
@@ -269,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         worker_root = owned_directory(root, "models/beat-this")
         scratch = owned_directory(root, ".cache/runtime-setup")
         cuda_cache = None
+        stem_cuda_cache = None
         configuration: setup.InstalledWorkerConfiguration
         if production_windows():
             require(condition=options.profile is None, message="Windows BPM uses the ONNX worker")
@@ -283,16 +312,18 @@ def main(argv: list[str] | None = None) -> int:
                 profile=cast("WorkerProfile | None", options.profile),
             )
         if options.with_stems:
-            prepare_stems(root, check=options.check)
+            stem_cuda_cache = prepare_stems(root, check=options.check)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"Source runtime setup failed: {error}\n")
         return 1
+    stem_warmup = bool(stem_cuda_cache and stem_cuda_cache.warmup_executed)
     sys.stdout.write(
         json.dumps({
             "source_runtime": "passed",
             "worker": str(configuration.manifest),
             "stems_checked": options.with_stems,
-            "inference_executed": bool(cuda_cache and cuda_cache["warmup_executed"]),
+            "inference_executed": stem_warmup or bool(cuda_cache and cuda_cache["warmup_executed"]),
+            "bs_roformer_cuda_warmup_executed": stem_warmup,
             "cuda_cache": cuda_cache,
         })
         + "\n"

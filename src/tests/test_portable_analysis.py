@@ -278,6 +278,10 @@ def test_actual_bootstrap_start_binds_worker_and_checks_never_construct_app(
     monkeypatch.setitem(sys.modules, "flitzis_looper.ui.run", ui_run_module)
     monkeypatch.setattr(bootstrap, "configure", Mock(return_value=[object()]))
     monkeypatch.setattr(bootstrap, "check_runtime", check_runtime)
+    manifest = root / "models/bs-roformer-onnx/installation-fixture/manifest.json"
+    model_check = Mock(return_value={"manifest": str(manifest)})
+    monkeypatch.setattr(bootstrap, "check_bs_roformer_runtime", model_check)
+    monkeypatch.delenv("FLITZIS_BS_ROFORMER_ONNX_MANIFEST", raising=False)
     arguments = ["bootstrap.py", "--root", str(root), "--runtime", str(runtime)]
     if check is not None:
         arguments.append(check)
@@ -286,6 +290,8 @@ def test_actual_bootstrap_start_binds_worker_and_checks_never_construct_app(
     bootstrap.main()
 
     if check is None:
+        model_check.assert_called_once_with(root, runtime, require_model=True)
+        assert os.environ["FLITZIS_BS_ROFORMER_ONNX_MANIFEST"] == str(manifest)
         prepare_ui.assert_called_once_with()
         controller_factory.assert_called_once_with(
             beat_this_installation_root=root.resolve() / "analysis-runtime/beat-this"
@@ -300,6 +306,7 @@ def test_actual_bootstrap_start_binds_worker_and_checks_never_construct_app(
         ]
         check_runtime.assert_not_called()
     else:
+        model_check.assert_not_called()
         prepare_ui.assert_not_called()
         controller_factory.assert_not_called()
         run_ui.assert_not_called()

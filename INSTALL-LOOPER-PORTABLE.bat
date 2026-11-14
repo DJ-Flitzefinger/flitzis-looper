@@ -967,8 +967,8 @@ try {
                         $selection.worker_candidate = $analysis.pointer_bytes
                         Set-PortableWorkerSelection $target $selection
                         Invoke-PortableAnalysis $actualTarget $checkout $runtime 'check' ''
-                        Invoke-PortableCheck $actualTarget $checkout $runtime
                         Invoke-PortableModels $actualTarget $checkout $runtime 'repair'
+                        Invoke-PortableCheck $actualTarget $checkout $runtime
                     } catch {
                         Set-PortableWorkerSelection $target $selection -Restore
                         throw
@@ -1017,8 +1017,8 @@ try {
     $record.worker_candidate = $analysis.pointer_bytes
     Save-PortableTransaction $target $record 'staging'
     Set-PortableWorkerSelection $target $record
-    Invoke-PortableCheck $actualTarget $paths.source $paths.candidate
     Invoke-PortableModels $actualTarget $paths.source $paths.candidate 'repair'
+    Invoke-PortableCheck $actualTarget $paths.source $paths.candidate
     if ($legacyDirectory -and -not $oldRelease.PSObject.Properties['runtime_files']) {
         $proofPath = Join-Path $target "cache/legacy-owner-$operation.json"
         $savedPythonHome = $env:PYTHONHOME; $savedPythonPath = $env:PYTHONPATH

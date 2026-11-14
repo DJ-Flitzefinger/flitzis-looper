@@ -56,6 +56,7 @@ NATIVE_NAME = "flitzis_looper_audio.cp314-win_amd64.pyd"
 NATIVE_ENTRY = "flitzis_looper_audio/" + NATIVE_NAME
 WHEEL_TAG = "cp314-cp314-win_amd64"
 BEAT_WORKER_EXECUTABLE = Path("runtime/beat-this/native-beat-this-worker.exe")
+BS_WORKER_EXECUTABLE = Path("runtime/bs-roformer/native-bs-roformer-worker.exe")
 VENDORED_PACKAGE = Path("flitzis_bs_roformer")
 VENDORED_SOURCE = Path("vendor/bs_roformer/src") / VENDORED_PACKAGE
 NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
@@ -434,16 +435,16 @@ def private_python_environment(runtime: Path) -> dict[str, str]:
     return env
 
 
-def copy_beat_worker(runtime: Path, executable: Path) -> None:
+def copy_worker(runtime: Path, executable: Path, relative: str | Path) -> None:
     require(
         executable.is_file()
         and not any(
             path.is_symlink() or path.is_junction() for path in (executable, *executable.parents)
         )
         and 0 < executable.stat().st_size <= 64 * 1024 * 1024,
-        "Use the matching Windows x64 Release BeatThis worker executable",
+        f"Use the matching Windows x64 Release worker executable: {executable.name}",
     )
-    destination = runtime / BEAT_WORKER_EXECUTABLE
+    destination = runtime / relative
     destination.parent.mkdir(parents=True)
     shutil.copyfile(executable, destination)
 
@@ -459,6 +460,19 @@ def beat_worker_executable(args: argparse.Namespace, output: Path) -> Path:
     from flitzis_looper.analysis.native_provisioning import build_native_worker  # noqa: PLC0415
 
     return build_native_worker(REPO, output / "beat-worker-build")
+
+
+def bs_worker_executable(args: argparse.Namespace, output: Path) -> Path:
+    """Select the installer-built or locally compiled BS-RoFormer Release executable."""
+    executable = args.bs_worker_executable
+    if args.runtime_directory:
+        require(executable is not None, "Ordinary installs must supply their BS-RoFormer worker")
+        assert executable is not None
+        return executable
+    require(executable is None, "The ZIP builder compiles its BS-RoFormer worker from source")
+    from flitzis_looper.bs_onnx_provisioning import build_bs_onnx_worker  # noqa: PLC0415
+
+    return build_bs_onnx_worker(REPO, output / "bs-worker-build")
 
 
 def stage_bundle_worker(root: Path, runtime: Path, checkout: Path, asset_cache: Path) -> None:
@@ -652,10 +666,12 @@ def build(args: argparse.Namespace) -> None:
     emit(f"Copied {len(dependencies)} non-development distributions")
     native, wheel_sha256 = copy_application(runtime, checkout, args.native_wheel)
     copy_external_runtime(runtime, checkout, args)
-    copy_beat_worker(runtime, beat_worker_executable(args, output))
+    copy_worker(runtime, beat_worker_executable(args, output), BEAT_WORKER_EXECUTABLE)
+    copy_worker(runtime, bs_worker_executable(args, output), BS_WORKER_EXECUTABLE)
     copy_licenses(runtime, args.license_file)
     if not args.runtime_directory:
         stage_bundle_worker(root, runtime, checkout, output / "beat-worker-assets")
+        write_json(root / "portable-root.json", CANDIDATE_OWNER)
     preflight(runtime, checkout, root, require_analysis=not args.runtime_directory)
     # Input data is introduced only during activation; its structural parent
     # must already be owned so a later empty parent is safe to retire.
@@ -714,7 +730,6 @@ def package_candidate(
     for name in ["launch.ps1", "START-LOOPER.bat", "start.bat", "start-release.bat"]:
         template = runtime / ("dispatch.ps1" if name == "launch.ps1" else "START-LOOPER.bat")
         shutil.copyfile(template, staging / name)
-    write_json(staging / "portable-root.json", CANDIDATE_OWNER)
     write_json(
         staging / "current.json",
         {
@@ -751,6 +766,7 @@ def main() -> None:
     parser.add_argument(
         "--beat-worker-executable", type=Path, help="Internal source installer input"
     )
+    parser.add_argument("--bs-worker-executable", type=Path, help="Internal source installer input")
     parser.add_argument("--native-source-commit", required=True)
     parser.add_argument("--ffmpeg-dir", type=Path, required=True)
     parser.add_argument("--dll-dir", type=Path, action="append", default=[])

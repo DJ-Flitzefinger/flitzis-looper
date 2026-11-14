@@ -28,7 +28,7 @@ playback preparation and recording finalization retain independent paths.
 
 | Separator | Current inference path |
 | --- | --- |
-| BS-RoFormer MUSDB18HQ | Fresh default. The vendored Torch worker uses the pinned v1.0.12 config/checkpoint. Audio is stereo at 44.1 kHz with 485100-frame chunks, overlap 2 and batch up to 2. CPU uses FP32 and CUDA uses AMP. Disk-backed input and rolling overlap-add bound PCM staging. Short final chunks use reflection/zero padding. |
+| BS-RoFormer MUSDB18HQ | Fresh default. A prepared Windows x64 installation uses the native ONNX worker with the effective weights of the pinned v1.0.12 checkpoint. CPU uses FP32 and CUDA uses a separate AMP graph. Stereo 44.1 kHz, 485100-frame chunks, overlap 2 and batches up to 2 preserve the original Looper geometry. Disk-backed input and rolling overlap-add bound PCM staging. Short final chunks use reflection or zero padding. |
 | Demucs `htdemucs` | Supported saved/user choice. The locked Torch CLI retains whole-track model input/output and the configured shifts/overlap. |
 | Native HTDemucs CPU | Explicit Windows x64 trial route through the gated adapter. The [release and worker slots](../../workers/htdemucs/native_cpu/) carry no approvals in this checkout, so that selection is unavailable. |
 
@@ -41,6 +41,15 @@ records the actual device, including fallback reason. Hardware availability
 and completed model loading establish readiness. The
 [setup guide](../model-worker-setup.md#optional-stem-models-and-codecs) covers pins,
 FFmpeg and offline provisioning.
+
+The ONNX adapter records an execution-specific producer after verifying the
+loaded host code, decoder, worker and selected profile. Saved sets use their
+verified restore path. New ONNX Generate requests start an inference because
+the execution identity becomes known after generation.
+
+CUDA cost calibration uses the reserved ORT device arena and the sampled
+process-local DXGI usage when available. Admission compares the larger observed
+value with current free memory. The DXGI value is a sampled maximum.
 
 Child numerics and FFmpeg pools are bounded. On Windows admission observes
 actual host capacity and low-memory notification. The suspended child joins

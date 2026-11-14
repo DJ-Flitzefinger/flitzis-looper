@@ -47,8 +47,18 @@ copy. The application's [main lock](../uv.lock) selects Windows CUDA 13.0
 Torch 2.12.0 and TorchAudio 2.11.0 wheels and TorchCodec 0.13.0. The separate
 Beat This worker does not share these packages.
 
-The extra setup flag acquires the pinned Demucs `htdemucs` and BS-RoFormer
-MUSDB18HQ assets, verifies their bytes and loads each model on CPU. The
+The extra setup flag acquires and verifies the pinned Demucs `htdemucs` and
+BS-RoFormer MUSDB18HQ assets and checks each model on CPU. On Windows x64,
+it builds the native BS-RoFormer worker, derives its external weights locally
+and verifies its [CPU and CUDA graph topology](../workers/bs_roformer/README.md).
+The validated installation is retained under `models/bs-roformer-onnx/`.
+The CPU worker also verifies the Intel oneMKL and OpenMP DLLs acquired from
+pinned Intel wheels during installation. Their original licenses and
+third-party notices stay with each installed package in `mkl-notices/`.
+The Source checkout and Portable archive carry the installer and graph
+topology. The installer obtains the Intel libraries directly from PyPI.
+CUDA preparation runs under the offline worker owner and reuses the cache for
+the matching GPU, driver, worker, graph and runtime. The
 [Demucs pins](../src/flitzis_looper/controller/model_pins.py) and
 [BS-RoFormer pins](../src/flitzis_looper/controller/bs_roformer_assets.py)
 are the authority for filenames, checksums and source provenance. The default

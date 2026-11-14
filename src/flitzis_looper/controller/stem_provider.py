@@ -80,6 +80,7 @@ class ProviderCalibration:
     seconds: float
     verified: bool
     observed_at: float
+    cuda_process_sampled_usage_bytes: int | None = None
 
 
 class StemProviderSelector:
@@ -160,6 +161,7 @@ class StemProviderSelector:
         verified: bool,
         now: float | None = None,
         observed_at: float | None = None,
+        cuda_process_sampled_usage_bytes: int | None = None,
     ) -> None:
         """Train only complete verified successful artifacts, never a fallback cost."""
         if (
@@ -191,7 +193,14 @@ class StemProviderSelector:
             previous = costs.get(execution.device)
             if previous is not None and previous.observed_at >= observed:
                 return
-            costs[execution.device] = _Cost(seconds, observed, execution.cuda_peak_bytes)
+            cuda_requirement = execution.cuda_peak_bytes
+            if (
+                cuda_requirement is not None
+                and type(cuda_process_sampled_usage_bytes) is int
+                and 0 < cuda_process_sampled_usage_bytes <= 2**63 - 1
+            ):
+                cuda_requirement = max(cuda_requirement, cuda_process_sampled_usage_bytes)
+            costs[execution.device] = _Cost(seconds, observed, cuda_requirement)
             self._costs.move_to_end(plan.key)
             while len(self._costs) > _MAX_KEYS:
                 self._costs.popitem(last=False)
@@ -211,6 +220,7 @@ class StemProviderSelector:
             verified=calibration.verified,
             now=now,
             observed_at=calibration.observed_at,
+            cuda_process_sampled_usage_bytes=calibration.cuda_process_sampled_usage_bytes,
         )
 
     def _expire(self, now: float) -> None:

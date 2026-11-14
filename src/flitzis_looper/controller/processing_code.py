@@ -32,6 +32,55 @@ if TYPE_CHECKING:
 
 
 _HOST_TARGETS = {
+    "bs_roformer_onnx.py": (
+        (
+            "_digests",
+            "_run_failure",
+            "_decode",
+            "_producer_family",
+            "_producer_identity",
+            "_seal_launch",
+            "_environment",
+            "_cuda_execution_matches",
+            "_cuda_identity",
+            "_reserved_cuda_peak",
+            "_execution",
+            "_verify_outputs",
+            "_run_worker",
+            "_run_cache_warmup",
+            "_cuda_cache",
+            "_onnx_host_paths",
+            "_confirmed_cuda_device",
+            "_retained_cuda_cache",
+        ),
+        (
+            "BsOnnxStemGenerationBackend",
+            "_SourcePcm",
+            "_TrackReceipt",
+            "_CudaExecution",
+            "_CudaArena",
+            "_FinishedAttempt",
+            "_CostContext",
+        ),
+    ),
+    "stem_provenance.py": (("native_conversion_identity", "_host_processing_paths"), ()),
+    "bs_onnx_installation.py": (
+        (
+            "load_bs_onnx_installation",
+            "bs_onnx_worker_cwd",
+            "_regular_file",
+            "_read_json",
+            "_required_digest",
+            "_crt_inventory",
+        ),
+        ("BsOnnxInstallation", "BsOnnxInstallationError"),
+    ),
+    "bs_onnx_cuda_cache.py": (
+        ("bs_cuda_cache_status", "ensure_bs_cuda_cache"),
+        ("BsCudaCacheStatus",),
+    ),
+    "bs_onnx_vram.py": (("nvml_free_bytes", "_query_free_bytes", "parse_cuda_memory"), ()),
+    "beat_cuda_cache.py": (("cuda_device_identity",), ("CudaDeviceIdentity",)),
     "contracts.py": ((), ("WorkerLimits",)),
     # The legacy selector constructs this adapter. Its release and execution
     # identity are separate from the guarded legacy producer roles.
@@ -53,7 +102,15 @@ _HOST_TARGETS = {
         (),
     ),
 }
-_HOST_CONSTANT_TARGETS = {"contracts.py": (), "native_demucs_cpu.py": ()}
+_HOST_CONSTANT_TARGETS = {
+    "contracts.py": (),
+    "native_demucs_cpu.py": (),
+    "bs_roformer_onnx.py": ("_ONNX_HOST_SOURCES", "_DECODER_SOURCES", "_FFT_PROFILES", "_SOURCES"),
+    "bs_onnx_installation.py": ("_CRT_DLLS",),
+    "bs_onnx_cuda_cache.py": ("_RECIPE",),
+    "bs_onnx_vram.py": ("_KIND", "_MAX_BYTES", "_SYSTEM32"),
+    "beat_cuda_cache.py": ("_SYSTEM32",),
+}
 
 
 @contextmanager
@@ -1185,7 +1242,7 @@ def _ctypes_attribute(expression: ast.Attribute, namespace: dict[str, object]) -
     if isinstance(expression.value, ast.Name):
         module = namespace.get(expression.value.id)
         supported = (
-            {"Structure", "c_int64", "c_uint64", "c_size_t"}
+            {"Structure", "c_int64", "c_uint", "c_uint64", "c_size_t"}
             if module is ctypes
             else {"DWORD", "LONG"}
             if module is wintypes

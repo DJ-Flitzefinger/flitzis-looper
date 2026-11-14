@@ -13,6 +13,7 @@ import pytest
 from flitzis_looper.analysis import beat_cuda_cache
 from flitzis_looper.analysis.contracts import BeatModelIdentity
 from flitzis_looper.analysis.worker import WorkerConfiguration
+from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -50,7 +51,7 @@ def test_source_main_defaults_to_repo_owned_required_worker_and_optional_stems(
     root = tmp_path / "clone"
     monkeypatch.setattr(source_setup, "__file__", str(root / "scripts/setup-runtime.py"))
     worker = Mock(return_value=configuration(root))
-    stems = Mock()
+    stems = Mock(return_value=None)
     monkeypatch.setattr(source_setup, "prepare_worker", worker)
     monkeypatch.setattr(source_setup, "prepare_stems", stems)
     assert source_setup.main(["--check", "--with-stems"]) == 0
@@ -61,6 +62,32 @@ def test_source_main_defaults_to_repo_owned_required_worker_and_optional_stems(
     report = json.loads(capsys.readouterr().out)
     assert report["source_runtime"] == "passed"
     assert report["inference_executed"] is False
+    assert report["bs_roformer_cuda_warmup_executed"] is False
+
+
+def test_source_reports_bs_cuda_warmup_from_this_invocation(
+    source_setup: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(source_setup, "__file__", str(tmp_path / "scripts/setup-runtime.py"))
+    monkeypatch.setattr(source_setup, "production_windows", lambda: True)
+    monkeypatch.setattr(
+        source_setup,
+        "prepare_windows_worker",
+        Mock(return_value=(configuration(tmp_path), {"warmup_executed": False})),
+    )
+    monkeypatch.setattr(
+        source_setup,
+        "prepare_stems",
+        Mock(return_value=BsCudaCacheStatus("ready", "prepared", warmup_executed=True)),
+    )
+
+    assert source_setup.main(["--with-stems"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["inference_executed"] is True
+    assert report["bs_roformer_cuda_warmup_executed"] is True
 
 
 def test_windows_check_uses_onnx_and_does_not_warm_cuda(
@@ -226,3 +253,64 @@ def test_source_stem_check_respects_external_override_and_uses_guarded_fresh_chi
     assert command[command.index("--mode") + 1] == "check"
     assert child.call_args.kwargs["env"]["FLITZIS_MODEL_CACHE_DIR"] == os.fspath(cache)
     acquire.assert_not_called()
+
+
+def test_windows_source_stem_setup_publishes_only_staged_worker(
+    source_setup: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "clone"
+    scratch = root / ".cache/runtime-setup"
+    model_root = root / "models/bs-roformer-onnx"
+    cache = tmp_path / "external-weights"
+    monkeypatch.setenv("FLITZIS_MODEL_CACHE_DIR", str(cache))
+    monkeypatch.setattr(source_setup, "production_windows", lambda: True)
+    monkeypatch.setattr(source_setup, "acquire_pinned_asset", Mock())
+    monkeypatch.setattr(source_setup.bs_roformer_assets, "install_model_assets", Mock())
+    worker = scratch / "worker.exe"
+    build = Mock(return_value=worker)
+    stage = Mock()
+    preparation = BsCudaCacheStatus("ready", "prepared", warmup_executed=True)
+
+    def staged(*_args: object, **options: object) -> object:
+        observe = options["cuda_preparation"]
+        assert callable(observe)
+        observe(preparation)
+        return stage.return_value
+
+    stage.side_effect = staged
+    select = Mock()
+    child = Mock()
+    monkeypatch.setattr(source_setup, "build_bs_onnx_worker", build)
+    monkeypatch.setattr(source_setup, "stage_bs_onnx_installation", stage)
+    monkeypatch.setattr(source_setup, "select_bs_onnx_installation", select)
+    monkeypatch.setattr(source_setup.subprocess, "run", child)
+
+    assert source_setup.prepare_stems(root, check=False) is preparation
+
+    build.assert_called_once_with(root, scratch)
+    stage.assert_called_once()
+    assert stage.call_args.args == (
+        root,
+        model_root,
+        worker,
+        cache / "bs-roformer-musdb18hq",
+        scratch / "beat-this-downloads",
+    )
+    select.assert_called_once_with(model_root, stage.return_value)
+    child.assert_called_once()
+    assert child.call_args.args[0][-4:] == [
+        "--child-action",
+        "load",
+        "--separator",
+        "demucs:htdemucs",
+    ]
+
+    stage.side_effect = RuntimeError("CPU load failed")
+    select.reset_mock()
+    child.reset_mock()
+    with pytest.raises(RuntimeError, match="CPU load failed"):
+        source_setup.prepare_stems(root, check=False)
+    select.assert_not_called()
+    child.assert_called_once()

@@ -139,7 +139,10 @@ fn modules(context: &Context) -> Result<Vec<Module>, String> {
         .collect()
 }
 
-#[cfg(feature = "native-beat-this-worker")]
+#[cfg(any(
+    feature = "native-beat-this-worker",
+    feature = "native-bs-roformer-worker"
+))]
 pub(super) fn load_worker_crt(
     directory: &Path,
     context: &Context,

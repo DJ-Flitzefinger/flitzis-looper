@@ -20,6 +20,7 @@ from unittest.mock import patch
 from weakref import WeakKeyDictionary
 
 from flitzis_looper.analysis import process
+from flitzis_looper.bs_onnx_installation import BS_ONNX_EXECUTABLE, BS_ONNX_MANIFEST_ENV
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.committed_stem_residency import resident_stem_admission_pressure
 from flitzis_looper.controller.performance_confirmation import (
@@ -28,10 +29,12 @@ from flitzis_looper.controller.performance_confirmation import (
 )
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stem_batch import StemBatchController
+from flitzis_looper.controller.stem_cache import verified_stem_cache_available
 from flitzis_looper.controller.stem_identity import source_digest
+from flitzis_looper.controller.stem_process import stem_cache_io_path
 from flitzis_looper.controller.stem_separators import SelectedStemGenerationBackend
 from flitzis_looper.controller.stems import StemController
-from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.models import STEM_KINDS, PadContentIdentity, ProjectState, SessionState
 from flitzis_looper.system_resources import (
     HostMemory,
     PerformanceInformation,
@@ -282,7 +285,18 @@ class _OwnedProcessObservation:
             return arguments[2]
         if len(arguments) > 1 and arguments[1] == "-c":
             return "python-detector"
-        return Path(arguments[0]).name if arguments else "unknown"
+        if not arguments:
+            return "unknown"
+        executable = Path(arguments[0]).name
+        if executable.casefold() == BS_ONNX_EXECUTABLE:
+            commands = arguments[2:] if arguments[1:2] == ["--cuda"] else arguments[1:]
+            if (
+                len(commands) > 1
+                and commands[0] == "track"
+                and Path(commands[1]).name == "source.f32"
+            ):
+                return "bs-roformer-onnx-track"
+        return executable
 
     def _profile_return(
         self, scope: process._OwnedTreeProcess, name: str, frame: FrameType
@@ -390,8 +404,9 @@ class _OwnedProcessObservation:
             amounts, live, advanced = self._sample_scope(scope, command, seen)
             for name in _MEMORY_KEYS:
                 owned[name] += amounts[name]
-            inference_trees += int(live and command in _INFERENCE_MODULES)
-            advancing_trees += int(live and advanced and command in _INFERENCE_MODULES)
+            inference = command in _INFERENCE_MODULES or command == "bs-roformer-onnx-track"
+            inference_trees += int(live and inference)
+            advancing_trees += int(live and advanced and inference)
         parent = self.counters.snapshot(self.counters.kernel.GetCurrentProcess())
         host = self.counters.host()
         self.samples += 1
@@ -514,10 +529,19 @@ class _OwnedProcessObservation:
 class _ObservedSelectedBackend:
     """Delegate once to the unmodified backend; observe metadata and original progress."""
 
-    def __init__(self, expected: set[str], meter: _OwnedProcessObservation) -> None:
+    def __init__(
+        self,
+        expected: set[str],
+        meter: _OwnedProcessObservation,
+        *,
+        onnx_manifest: Path | None,
+        expected_device: str,
+    ) -> None:
         self.delegate = SelectedStemGenerationBackend()
         self.expected = expected
         self.meter = meter
+        self.onnx_manifest = onnx_manifest
+        self.expected_device = expected_device
         self.stems: StemController | None = None
         self.requests: list[dict[str, object]] = []
         self.results: list[dict[str, object]] = []
@@ -534,15 +558,17 @@ class _ObservedSelectedBackend:
         assert request.target_shape.sample_rate_hz == request.target_shape.frame_count == 48_000
         assert request.target_shape.channels == 2
         assert request.encoder_executable is not None
-        assert request.encoder_contract
-        assert request.python_source_roots
         assert self.stems is not None
         job = next(
             job for job in tuple(self.stems._jobs.values()) if job.resolved_request is request
         )
-        assert job.processing_files is not None
-        assert job.producer_identity is not None
-        assert len(job.producer_identity) == 64
+        assert request.bs_onnx_manifest == self.onnx_manifest
+        if self.onnx_manifest is None:
+            assert request.encoder_contract
+            assert request.python_source_roots
+            assert job.processing_files is not None
+            assert job.producer_identity is not None
+            assert len(job.producer_identity) == 64
         with self._lock:
             assert all(row["digest"] != digest for row in self.requests), (
                 "duplicate physical inference"
@@ -561,7 +587,7 @@ class _ObservedSelectedBackend:
             self.meter.sample()
 
         result = self.delegate.generate(request, observe)
-        assert result.device == "cpu"
+        assert result.device == self.expected_device, result.diagnostic
         assert not result.cpu_fallback
         assert result.artifact_count == 5
         assert (
@@ -569,6 +595,14 @@ class _ObservedSelectedBackend:
             if request.separator == "bs-roformer:musdb18hq"
             else result.encoder_verified
         ), "actual executed encoder/decoder receipt required"
+        if self.onnx_manifest is not None:
+            assert result.execution is not None
+            assert result.execution.backend == "bs-roformer"
+            assert result.execution.device == self.expected_device
+            assert result.executed_producer_identity is not None
+            assert len(result.executed_producer_identity) == 64
+            if self.expected_device == "cuda":
+                assert result.execution.cuda_device_identity is not None
         with self._lock:
             self.results.append({
                 "pad_id": request.sample_id,
@@ -577,6 +611,12 @@ class _ObservedSelectedBackend:
                 **asdict(result),
             })
         return result
+
+    def accept_calibration(
+        self, request: StemGenerationRequest, result: StemGenerationResult
+    ) -> None:
+        if self.onnx_manifest is not None:
+            self.delegate.accept_calibration(request, result)
 
 
 class StemBatchNeuralProbe:
@@ -622,11 +662,17 @@ class StemBatchNeuralProbe:
         self._expected = {rows[slot]["original"]["sha256"] for slot in self.occupied}
         assert len(self._expected) == expected_jobs
         self._patches = ExitStack()
-        # Public control captures auto. This explicit test environment makes the
-        # unmodified fresh Torch detector choose CPU; it does not rewrite intent.
-        self._patches.enter_context(patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "-1"}))
+        self.onnx_manifest, self.expected_device = self._selector_profile(separator)
+        if self.onnx_manifest is None:
+            # Public control captures auto. Keep the stock Torch fixture on CPU.
+            self._patches.enter_context(patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "-1"}))
         self.meter = _OwnedProcessObservation()
-        self.backend = _ObservedSelectedBackend(self._expected, self.meter)
+        self.backend = _ObservedSelectedBackend(
+            self._expected,
+            self.meter,
+            onnx_manifest=self.onnx_manifest,
+            expected_device=self.expected_device,
+        )
         self.session = SessionState(settings_open=False)
         self.persistence = ProjectPersistence(self.project)
         self.persistence.config_path = Path("samples/neural-batch.json")
@@ -666,6 +712,18 @@ class StemBatchNeuralProbe:
         self._before = self.persistence.config_path.read_bytes()
         self._all_cursor = 0
         self._closing = self._closed = False
+
+    @staticmethod
+    def _selector_profile(separator: str) -> tuple[Path | None, str]:
+        if os.environ.get("FLITZIS_B1_NEURAL_ONNX") != "1":
+            return None, "cpu"
+        assert separator == "bs-roformer:musdb18hq"
+        manifest = Path(os.environ[BS_ONNX_MANIFEST_ENV])
+        assert manifest.is_absolute()
+        assert manifest.is_file()
+        device = os.environ.get("FLITZIS_B1_NEURAL_ONNX_DEVICE", "cpu")
+        assert device in {"cpu", "cuda"}
+        return manifest, device
 
     def start(self) -> None:
         """Accept the exact immutable public warning, without producer substitutes."""
@@ -750,6 +808,10 @@ class StemBatchNeuralProbe:
                 selection.entry.pair.provenance.producer_identity
                 == selection.entry.producer_identity
             )
+            if self.onnx_manifest is not None:
+                digest = source_digest(selection.entry.source_version)
+                executed = next(row for row in self.backend.results if row["digest"] == digest)
+                assert selection.entry.producer_identity == executed["executed_producer_identity"]
         return True
 
     def adopt_all(self) -> None:
@@ -799,6 +861,15 @@ class StemBatchNeuralProbe:
                 assert reopened is not None
                 assert reopened.pair == entry.pair
                 assert saved.project.pad_stem_mix_mode[slot] == "all_stems"
+                if self.onnx_manifest is not None:
+                    assert verified_stem_cache_available(reopened)
+                    pair = reopened.pair
+                    assert pair is not None
+                    descriptor = stem_cache_io_path(Path(pair.descriptor_reference))
+                    assert descriptor.is_file()
+                    pcm = stem_cache_io_path(Path(pair.pcm_generation))
+                    assert (pcm / "manifest.json").is_file()
+                    assert all((pcm / f"{kind}.f32le").is_file() for kind in STEM_KINDS)
             else:
                 assert saved.project.stem_cache[slot] is None
         assert (saved.project.selected_pad, saved.project.selected_bank) == (215, 5)
@@ -810,10 +881,16 @@ class StemBatchNeuralProbe:
         assert not self.meter.errors, self.diagnostics()
         assert self.meter.started == self.meter.closed > 0
         assert self.meter.peak_inference_trees <= 2
-        if self.expected_jobs >= 2:
+        if self.onnx_manifest is not None:
+            observed_tracks = [
+                row for row in metrics["processes"] if row["command"] == "bs-roformer-onnx-track"
+            ]
+            assert len(observed_tracks) == self.expected_jobs, self.diagnostics()
+        elif self.expected_jobs >= 2:
             assert self.meter.peak_inference_trees >= 2, self.diagnostics()
             assert self.meter.overlap_cpu_samples > 0, self.diagnostics()
-        assert self.observation.peak_running == 2
+        if self.onnx_manifest is None:
+            assert self.observation.peak_running == 2
         assert self.observation.peak_queued <= 32
         assert self.observation.peak_submitted <= 34
         return json.dumps({
@@ -822,8 +899,15 @@ class StemBatchNeuralProbe:
             "scope": "actual stock neural/source/controller/Config/own registration+ALL ACK; "
             "stopped one-second48000Hz stereo inputs; no216voices/music/device acceptance",
             "requested_device_policy": "auto",
-            "effective_device": "cpu",
-            "test_environment": {"CUDA_VISIBLE_DEVICES": "-1"},
+            "effective_device": self.expected_device,
+            "test_environment": (
+                {
+                    "FLITZIS_B1_NEURAL_ONNX": "1",
+                    "FLITZIS_B1_NEURAL_ONNX_DEVICE": self.expected_device,
+                }
+                if self.onnx_manifest is not None
+                else {"CUDA_VISIBLE_DEVICES": "-1"}
+            ),
             "processing_settings": {
                 "demucs_shifts": self.project.demucs_shifts,
                 "demucs_overlap": self.project.demucs_overlap,

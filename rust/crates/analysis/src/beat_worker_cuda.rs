@@ -1,15 +1,14 @@
-use flitzis_looper_analysis::{
-    beat_inference::{ModelStartupStage, Provider},
-    trial_lifetime::Context,
-};
+use flitzis_looper_analysis::{beat_inference::ModelStartupStage, trial_lifetime::Context};
 use libloading::os::windows::Library;
 use serde_json::{Value, json};
+#[cfg(feature = "native-beat-this-worker")]
+use std::path::Path;
 use std::{
     ffi::{CStr, c_char, c_void},
     io,
-    path::Path,
 };
 
+#[cfg(feature = "native-beat-this-worker")]
 use super::invocation::Invocation;
 
 pub const ORT_MANIFEST_SHA: &str =
@@ -19,8 +18,9 @@ pub const ORT_PACKAGE_SHA: &str =
 const EP_SHA: &str = "110929d2552bc775828e7a5c18c5ef9ab90898fc57a57868623fe2fe8c82d494";
 const CUDART_SHA: &str = "c2c9a9c22a9bcba90e261825968836787b331038047a26770cffb7a583c28344";
 
-pub fn provider() -> Provider {
-    Provider::Cuda {
+#[cfg(feature = "native-beat-this-worker")]
+pub fn provider() -> flitzis_looper_analysis::beat_inference::Provider {
+    flitzis_looper_analysis::beat_inference::Provider::Cuda {
         memory_limit: usize::MAX,
     }
 }
@@ -28,6 +28,10 @@ pub fn provider() -> Provider {
 pub struct Device {
     name: String,
     driver_api_version: i32,
+    #[cfg(feature = "native-bs-roformer-worker")]
+    uuid: Option<String>,
+    #[cfg(feature = "native-bs-roformer-worker")]
+    luid: Option<([u8; 8], u32)>,
 }
 
 #[derive(serde::Serialize)]
@@ -71,6 +75,7 @@ pub fn device(context: &Context, failure: &mut Option<StartupError>) -> Result<D
         let mut id = 0;
         let mut label = [0u8; 256];
         let mut driver_api_version = 0;
+        let _uuid;
         // These four entry points are the CUDA Driver API's Windows signatures.
         // The exact System32 module is owned through every call.
         unsafe {
@@ -86,9 +91,10 @@ pub fn device(context: &Context, failure: &mut Option<StartupError>) -> Result<D
                 name(label.as_mut_ptr().cast(), label.len() as i32, id),
                 failure,
             )?;
-            if let Ok(expected) = std::env::var("CUDA_VISIBLE_DEVICES") {
-                verify_device_uuid(module, id, &expected, failure)?;
-            }
+            _uuid = std::env::var("CUDA_VISIBLE_DEVICES")
+                .ok()
+                .map(|expected| verify_device_uuid(module, id, &expected, failure))
+                .transpose()?;
             check_driver(
                 "cuDriverGetVersion",
                 version(&mut driver_api_version),
@@ -105,6 +111,10 @@ pub fn device(context: &Context, failure: &mut Option<StartupError>) -> Result<D
         Ok(Device {
             name: name.to_owned(),
             driver_api_version,
+            #[cfg(feature = "native-bs-roformer-worker")]
+            uuid: _uuid,
+            #[cfg(feature = "native-bs-roformer-worker")]
+            luid: query_adapter_luid(module, id),
         })
     })();
     library.complete()?;
@@ -116,7 +126,7 @@ fn verify_device_uuid(
     device: i32,
     expected: &str,
     failure: &mut Option<StartupError>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     use std::fmt::Write as _;
     let address = driver_symbol(module, c"cuDeviceGetUuid", failure)?;
     // The Driver API writes one 16-byte CUuuid for the selected ordinal.
@@ -139,7 +149,7 @@ fn verify_device_uuid(
     if actual != expected {
         return Err("CUDA worker device differs from its prepared cache identity".into());
     }
-    Ok(())
+    Ok(actual)
 }
 
 fn driver_symbol(
@@ -289,6 +299,7 @@ fn qualified_device_error(status: u32, gpu: &str, file: &str, call: &str) -> Opt
     }
 }
 
+#[cfg(feature = "native-beat-this-worker")]
 pub fn kernel_events(
     own: &Invocation,
     prefix: &Path,
@@ -342,6 +353,35 @@ pub fn runtime_evidence(device: &Device, receipt: &Value) -> Result<Value, Strin
         "package_sha256": ORT_PACKAGE_SHA,
         "provider_sha256": EP_SHA,
     }))
+}
+
+#[cfg(feature = "native-bs-roformer-worker")]
+fn query_adapter_luid(module: *mut c_void, device: i32) -> Option<([u8; 8], u32)> {
+    // The selected CUDA device's Windows adapter LUID binds subsequent DXGI
+    // telemetry. A driver without this optional query still supports inference.
+    let address = unsafe { GetProcAddress(module, c"cuDeviceGetLuid".as_ptr()) };
+    if address.is_null() {
+        return None;
+    }
+    let query: unsafe extern "system" fn(*mut u8, *mut u32, i32) -> i32 =
+        unsafe { std::mem::transmute(address) };
+    let mut luid = [0; 8];
+    let mut mask = 0;
+    let result = unsafe { query(luid.as_mut_ptr(), &raw mut mask, device) };
+    (result == 0 && mask != 0 && luid != [0; 8]).then_some((luid, mask))
+}
+
+#[cfg(feature = "native-bs-roformer-worker")]
+impl Device {
+    pub fn luid_and_node_mask(&self) -> Option<([u8; 8], u32)> {
+        self.luid
+    }
+
+    pub fn verified_uuid(&self) -> Result<&str, String> {
+        self.uuid
+            .as_deref()
+            .ok_or_else(|| "BS CUDA device UUID is required".into())
+    }
 }
 
 #[cfg(test)]

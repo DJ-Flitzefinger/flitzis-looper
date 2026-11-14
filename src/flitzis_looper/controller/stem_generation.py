@@ -109,6 +109,7 @@ class StemGenerationRequest:
     original_bytes: int | None = None
     producer_identity: str | None = None
     native_demucs_cpu: bool = False
+    bs_onnx_manifest: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +126,8 @@ class StemGenerationResult:
     decoder_verified: bool = False
     execution: ExecutionReceipt | None = None
     provider_calibration: ProviderCalibration | None = None
+    executed_producer_identity: str | None = None
+    calibration_family: str | None = None
 
 
 class CommandRunner(Protocol):

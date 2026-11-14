@@ -109,6 +109,7 @@ def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
             request.model_cache_dir / CONFIG_FILENAME,
             *(package / name for name in BS_PRODUCER_FILES),
             project_package / "provider_probe.py",
+            project_package / "bs_decode.py",
             project_package / "analysis" / "linux_broker.py",
             *_host_processing_paths(request),
             encoder,
@@ -147,9 +148,9 @@ def capture_processing_files(
     request: StemGenerationRequest,
 ) -> tuple[SealedProcessingFiles, str | None] | None:
     """Seal and hash all actual producer inputs off-thread; unavailable lineage is unknown."""
-    if request.native_demucs_cpu:
-        # Native codec/image lineage has a separate execution contract. Legacy
-        # checkpoint and Torch source witnesses cannot identify that producer.
+    if request.native_demucs_cpu or request.bs_onnx_manifest is not None:
+        # The native routes have their own execution contracts. The historical
+        # checkpoint and Torch source witnesses cannot identify those producers.
         return None
     paths = processing_paths(request)
     libraries = processing_library_versions(request)

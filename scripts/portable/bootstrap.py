@@ -39,6 +39,7 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
         if name.startswith("FLITZIS_WORKSPACE") or name in {
             "FLITZIS_NATIVE_EXTENSION_DIR",
             "FLITZIS_BEAT_THIS_ROOT",
+            "FLITZIS_BS_ROFORMER_ONNX_MANIFEST",
             "FLITZIS_RUNTIME_ACTIVE",
             "FLITZIS_RUNTIME_ARGS",
             "FLITZIS_APPLICATION_SOURCE_STAGE",
@@ -965,6 +966,50 @@ def check_beat_this_execution_api(
     }
 
 
+def check_bs_roformer_runtime(
+    root: Path, runtime: Path, *, require_model: bool
+) -> dict[str, object]:
+    """Bind the matching Release worker and its independently prepared model."""
+    from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
+        BS_ONNX_MODELS_DIRECTORY,
+        BS_ONNX_RUNTIME_EXECUTABLE,
+    )
+
+    helper_path = Path(__file__).with_name("prepare_analysis.py")
+    specification = importlib.util.spec_from_file_location("portable_paths", helper_path)
+    assert specification is not None
+    assert specification.loader is not None
+    helper = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(helper)
+    executable = helper.physical(runtime / BS_ONNX_RUNTIME_EXECUTABLE, runtime)
+    if not executable.is_file():
+        message = "Portable BS-RoFormer worker is missing; run the installer to repair it"
+        raise RuntimeError(message)
+    if not require_model:
+        return {"worker": str(executable), "model_checked": False}
+
+    from flitzis_looper.bs_onnx_provisioning import verify_bs_onnx_for_executable  # noqa: PLC0415
+
+    package_root = helper.physical(root / BS_ONNX_MODELS_DIRECTORY, root)
+    installation = verify_bs_onnx_for_executable(package_root, executable)
+    return {
+        "worker": str(executable),
+        "model_checked": True,
+        "manifest": str(installation.manifest),
+        "graph_sha256": installation.graph_sha256,
+        "cuda_graph_sha256": installation.cuda_graph_sha256,
+    }
+
+
+def _candidate_bundle(root: Path) -> bool:
+    """A development ZIP contains executable preflight, without Stem model data."""
+    marker = root / "portable-root.json"
+    return marker.is_file() and json.loads(marker.read_text(encoding="utf-8")) == {
+        "app": "flitzis-looper-candidate",
+        "schema_version": 1,
+    }
+
+
 def check_runtime(
     root: Path, checkout: Path, runtime: Path, *, require_analysis: bool = True
 ) -> None:
@@ -995,6 +1040,9 @@ def check_runtime(
     check_ordinary_transport_api(native_module)
     check_audio_output_api(native_module)
     check_stem_conversion_api(native_module)
+    separator = check_bs_roformer_runtime(
+        root, runtime, require_model=require_analysis and not _candidate_bundle(root)
+    )
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert customization.__file__ is not None, "Portable sitecustomize has no file origin"
@@ -1050,6 +1098,7 @@ def check_runtime(
             "portable_preflight": "passed",
             "analysis_checked": require_analysis,
             "analysis": analysis,
+            "bs_roformer": separator,
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
@@ -1086,10 +1135,13 @@ def main() -> None:
     if args.check or args.check_runtime or args.check_build_runtime:
         check_runtime(root, checkout, runtime, require_analysis=not args.check_build_runtime)
     else:
+        from flitzis_looper.bs_onnx_installation import BS_ONNX_MANIFEST_ENV  # noqa: PLC0415
         from flitzis_looper.controller import AppController  # noqa: PLC0415
         from flitzis_looper.ui import run_ui  # noqa: PLC0415
         from flitzis_looper.ui.run import prepare_ui_state_directory  # noqa: PLC0415
 
+        model = check_bs_roformer_runtime(root, runtime, require_model=True)
+        os.environ[BS_ONNX_MANIFEST_ENV] = str(model["manifest"])
         prepare_ui_state_directory()
         run_ui(AppController(beat_this_installation_root=root / "analysis-runtime/beat-this"))
 

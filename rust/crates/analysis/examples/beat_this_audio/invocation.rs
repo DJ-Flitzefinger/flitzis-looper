@@ -95,18 +95,49 @@ impl Invocation {
         Ok(values)
     }
 
+    pub fn create_output(
+        &mut self,
+        path: &Path,
+    ) -> Result<flitzis_looper_analysis::trial_lifetime::OwnedFile, String> {
+        self.open_output(path, |path| File::create_new(path))
+    }
+
+    #[cfg(all(windows, feature = "native-bs-roformer-worker"))]
+    pub fn create_readable_output(
+        &mut self,
+        path: &Path,
+    ) -> Result<flitzis_looper_analysis::trial_lifetime::OwnedFile, String> {
+        self.open_output(path, |path| {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .share_mode(1)
+                .open(path)
+        })
+    }
+
+    fn open_output(
+        &mut self,
+        path: &Path,
+        open: impl FnOnce(&Path) -> std::io::Result<File>,
+    ) -> Result<flitzis_looper_analysis::trial_lifetime::OwnedFile, String> {
+        self.context.checkpoint("output.write")?;
+        let path = path.to_owned();
+        self.paths.try_reserve(1).map_err(|e| e.to_string())?;
+        let file = open(&path).map_err(|e| e.to_string())?;
+        // Custody begins only after successful exclusive creation.
+        self.paths.push(path);
+        Ok(self.context.file(file, "output.close"))
+    }
+
     pub fn write(
         &mut self,
         path: &Path,
         write: impl FnOnce(&mut File, &Context) -> Result<(), String>,
     ) -> Result<(), String> {
-        self.context.checkpoint("output.write")?;
-        let path = path.to_owned();
-        self.paths.try_reserve(1).map_err(|e| e.to_string())?;
-        let file = File::create_new(&path).map_err(|e| e.to_string())?;
-        // Custody begins only after successful exclusive creation.
-        self.paths.push(path);
-        let mut file = self.context.file(file, "output.close");
+        let mut file = self.create_output(path)?;
         let mut result = write(&mut file, &self.context);
         if result.is_ok() {
             retain_first(&mut result, file.flush().map_err(|e| e.to_string()));
@@ -165,7 +196,7 @@ impl Invocation {
         self.finish_profile_with(result, || model.finish_profile())
     }
 
-    fn finish_profile_with<T>(
+    pub fn finish_profile_with<T>(
         &self,
         result: &mut Result<T, String>,
         finish: impl FnOnce() -> Result<String, String>,
@@ -205,9 +236,44 @@ impl Invocation {
     }
 
     pub fn finish(
+        self,
+        result: Result<serde_json::Value, String>,
+        diagnostic: Option<serde_json::Value>,
+        status: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> ExitCode {
+        self.finish_with_diagnostic(
+            result,
+            diagnostic.map(|value| value.to_string()),
+            status,
+            errors,
+        )
+    }
+
+    #[cfg(all(windows, feature = "native-bs-roformer-worker"))]
+    pub fn finish_stem(
+        self,
+        result: Result<serde_json::Value, String>,
+        cuda_failure: bool,
+        status: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> ExitCode {
+        if cuda_failure && let Err(error) = &result {
+            self.context
+                .record(writeln!(errors, "Error: {error}").map_err(|e| e.to_string()));
+        }
+        self.finish_with_diagnostic(
+            result,
+            cuda_failure.then(|| "FLITZIS_CUDA_FAILURE_V1:placement_or_inference".into()),
+            status,
+            errors,
+        )
+    }
+
+    fn finish_with_diagnostic(
         mut self,
         mut result: Result<serde_json::Value, String>,
-        diagnostic: Option<serde_json::Value>,
+        diagnostic: Option<String>,
         status: &mut impl Write,
         errors: &mut impl Write,
     ) -> ExitCode {

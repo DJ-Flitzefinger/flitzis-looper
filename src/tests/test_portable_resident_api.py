@@ -1035,6 +1035,11 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
         modules[name] = SimpleNamespace(__file__=str(runtime / f"python/{name}/__init__.py"))
     monkeypatch.setattr(bootstrap["importlib"], "import_module", modules.__getitem__)
     monkeypatch.setitem(bootstrap["check_runtime"].__globals__, "private_dlls", lambda *_: {})
+    monkeypatch.setitem(
+        bootstrap["check_runtime"].__globals__,
+        "check_bs_roformer_runtime",
+        lambda *_args, **_options: {"model_checked": False},
+    )
     parent_dlls = {"torch": {"torch_cpu.dll": "parent"}}
     child_dlls = {"ffmpeg": {"avcodec-62.dll": "child"}}
     monkeypatch.setitem(

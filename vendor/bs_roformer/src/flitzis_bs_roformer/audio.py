@@ -1,95 +1,13 @@
-"""Decode arbitrary FFmpeg-readable inputs to stereo float PCM on disk."""
+"""Read the complete BS-RoFormer stereo float PCM in model chunks."""
 
-import json
-import math
-from typing import TYPE_CHECKING, BinaryIO
+from typing import BinaryIO
 
 import torch
 from torch import Tensor
 
-from flitzis_bs_roformer.model import SAMPLE_RATE
-from flitzis_looper.bs_input_provenance import run_input_tool
-from flitzis_looper.offline_runtime import ffmpeg_command
-from flitzis_looper.stem_cancellation import check_cancelled
+from flitzis_looper.bs_decode import FRAME_BYTES, decode_source
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
-
-FRAME_BYTES = 8
-
-
-def decode_source(
-    source: Path, destination: Path, *, checkpoint: Callable[[str], None] | None = None
-) -> int:
-    """Probe before decoding, then validate the complete stereo float32 file shape.
-
-    No full-track PCM allocation occurs here. FFmpeg writes its bounded decode
-    buffers directly to a private temporary file; the inference reader reads
-    at most one model chunk at a time. All conversion and resampling is offline.
-    """
-    check_cancelled(checkpoint, "before_source_decode")
-    probe = run_input_tool(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=sample_rate,channels,duration:format=duration",
-            "-of",
-            "json",
-            str(source),
-        ],
-        checkpoint=checkpoint,
-    )
-    metadata = json.loads(probe.stdout)
-    streams = metadata.get("streams", [])
-    if len(streams) != 1:
-        msg = "Source must contain a decodable audio stream"
-        raise ValueError(msg)
-    stream = streams[0]
-    channels = int(stream.get("channels", 0))
-    rate = int(stream.get("sample_rate", 0))
-    duration = float(stream.get("duration", metadata.get("format", {}).get("duration", 0)))
-    if not 1 <= channels <= 64 or rate <= 0 or not math.isfinite(duration) or duration <= 0:
-        msg = "Source has invalid audio metadata"
-        raise ValueError(msg)
-    channel_conversion = ["-af", "pan=stereo|c0=c0|c1=c0"] if channels == 1 else []
-    run_input_tool(
-        ffmpeg_command([
-            "ffmpeg",
-            "-nostdin",
-            "-v",
-            "error",
-            "-y",
-            "-i",
-            str(source),
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-threads",
-            "1",
-            *channel_conversion,
-            "-ac",
-            "2",
-            "-ar",
-            str(SAMPLE_RATE),
-            "-c:a",
-            "pcm_f32le",
-            "-f",
-            "f32le",
-            str(destination),
-        ]),
-        checkpoint=checkpoint,
-    )
-    check_cancelled(checkpoint, "after_source_decode")
-    decoded_bytes = destination.stat().st_size
-    if decoded_bytes == 0 or decoded_bytes % FRAME_BYTES:
-        msg = "Decoded source has incomplete stereo float32 PCM"
-        raise ValueError(msg)
-    return decoded_bytes // FRAME_BYTES
+__all__ = ["decode_source"]
 
 
 def _read_frames(handle: BinaryIO, start: int, count: int, *, reverse: bool = False) -> Tensor:

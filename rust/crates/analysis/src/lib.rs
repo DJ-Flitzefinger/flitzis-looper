@@ -11,6 +11,8 @@ pub mod beat_audio;
 #[cfg(feature = "native-inference-trial")]
 pub mod beat_inference;
 mod bpm_pipeline;
+#[cfg(all(windows, feature = "native-bs-roformer-worker"))]
+pub mod bs_inference;
 mod canonical_digest;
 #[cfg(feature = "demucs-inference-trial")]
 pub mod demucs_inference;

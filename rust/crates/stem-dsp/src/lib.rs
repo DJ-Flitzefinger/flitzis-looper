@@ -23,6 +23,7 @@ pub const BINS: usize = FFT / 2 + 1;
 pub const CHANNELS: usize = 2;
 pub const STEMS: usize = 4;
 pub const MAX_CHUNK_FRAMES: usize = 485_100;
+/// Historical trial comparison used by diagnostics, not a host admission limit.
 pub const MAX_TRANSIENT_BYTES: usize = 1 << 30;
 const BLOCK: usize = 4096;
 const FFT_SCRATCH: usize = FFT * 4;
@@ -100,7 +101,7 @@ impl Geometry {
             + FFT
             + 2 * (FFT + FFT_SCRATCH);
         let transient_bytes = floats * size_of::<f32>() + PLAN_ALLOWANCE;
-        if transient_bytes > MAX_TRANSIENT_BYTES || FFT / 2 + frames > inverse_frames {
+        if FFT / 2 + frames > inverse_frames {
             return Err(Error::Shape);
         }
         Ok(Self {
@@ -430,6 +431,20 @@ impl Spectrum {
         &self.features
     }
 
+    /// Adopt a complete, finite external STFT in time/frequency/stereo/complex order.
+    pub fn from_features(
+        geometry: Geometry,
+        features: Vec<f32>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, Error> {
+        if features.len() != geometry.feature_len() {
+            return Err(Error::Shape);
+        }
+        finite(&features, cancelled)?;
+        checkpoint(cancelled)?;
+        Ok(Self { geometry, features })
+    }
+
     /// Planar stereo input, complete centered reflection and unnormalized STFT.
     pub fn analyze(pcm: &[f32], rate: u32, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
         if !pcm.len().is_multiple_of(CHANNELS) {
@@ -512,6 +527,52 @@ impl Spectrum {
 pub struct Reconstruction<'a> {
     spectrum: &'a Spectrum,
     inverse: InverseStorage<'a>,
+}
+
+/// Endpoint interpretation for a real inverse of the complex-masked spectrum.
+#[derive(Clone, Copy)]
+pub enum InverseEndpoints {
+    Standard,
+    /// The pinned BS CUDA AMP reference packs at least eight inverse rows.
+    /// In that geometry its cuFFT path folds imaginary DC into real Nyquist
+    /// and imaginary Nyquist into real DC, with negative signs.
+    BsCudaAmpReference,
+}
+
+impl InverseEndpoints {
+    fn real_parts(self, dc: Complex32, nyquist: Complex32) -> Result<(f32, f32), Error> {
+        let (dc, nyquist) = match self {
+            Self::Standard => (dc.re, nyquist.re),
+            Self::BsCudaAmpReference => (dc.re - nyquist.im, nyquist.re - dc.im),
+        };
+        if dc.is_finite() && nyquist.is_finite() {
+            Ok((dc, nyquist))
+        } else {
+            Err(Error::NonFinite)
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn bs_cuda_reference_cross_folds_both_imaginary_endpoints() {
+    let dc = Complex32::new(2.0, 3.0);
+    let nyquist = Complex32::new(4.0, 5.0);
+    assert_eq!(
+        InverseEndpoints::Standard.real_parts(dc, nyquist),
+        Ok((2.0, 4.0))
+    );
+    assert_eq!(
+        InverseEndpoints::BsCudaAmpReference.real_parts(dc, nyquist),
+        Ok((-3.0, 1.0))
+    );
+    assert_eq!(
+        InverseEndpoints::BsCudaAmpReference.real_parts(
+            Complex32::new(f32::MAX, 0.0),
+            Complex32::new(0.0, -f32::MAX),
+        ),
+        Err(Error::NonFinite)
+    );
 }
 
 enum InverseStorage<'a> {
@@ -610,6 +671,17 @@ impl<'a> Reconstruction<'a> {
         output: &mut [f32],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(), Error> {
+        self.write_stem_with_endpoints(masks, output, InverseEndpoints::Standard, cancelled)
+    }
+
+    /// Reconstruct with the endpoint convention selected for this model route.
+    pub fn write_stem_with_endpoints(
+        &mut self,
+        masks: &[f32],
+        output: &mut [f32],
+        endpoints: InverseEndpoints,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
         let g = self.spectrum.geometry;
         if masks.len() != g.features || output.len() != CHANNELS * g.frames {
             return Err(Error::Shape);
@@ -633,13 +705,13 @@ impl<'a> Reconstruction<'a> {
                     if !value.re.is_finite() || !value.im.is_finite() {
                         return Err(Error::NonFinite);
                     }
-                    // Real irfft ignores imaginary DC and Nyquist parts.
-                    inverse.transform.buffer[bin] = if bin == 0 || bin == FFT / 2 {
-                        Complex32::new(value.re, 0.0)
-                    } else {
-                        value
-                    };
+                    inverse.transform.buffer[bin] = value;
                 }
+                let dc = inverse.transform.buffer[0];
+                let nyquist = inverse.transform.buffer[FFT / 2];
+                let (dc, nyquist) = endpoints.real_parts(dc, nyquist)?;
+                inverse.transform.buffer[0] = Complex32::new(dc, 0.0);
+                inverse.transform.buffer[FFT / 2] = Complex32::new(nyquist, 0.0);
                 for bin in 1..FFT / 2 {
                     inverse.transform.buffer[FFT - bin] = inverse.transform.buffer[bin].conj();
                 }

@@ -1,10 +1,11 @@
-"""Repair pinned Portable models and verify both in fresh CPU processes."""
+"""Repair and verify the pinned models used by the Portable installation."""
 
 import argparse
 import importlib
 import importlib.util
 import json
 import os
+import platform
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, cast
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
     from flitzis_looper.models import StemSeparator
 
 type ModelMode = Literal["repair", "check"]
@@ -203,18 +205,71 @@ def run_model_child(context: ModelContext, separator: StemSeparator, action: Mod
         raise ModelCheckError(diagnostic, separator=separator, stage=action)
 
 
+def windows_bs_onnx() -> bool:
+    """The installed ONNX worker is the Windows x64 separator."""
+    return sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}
+
+
+def portable_bs_onnx(
+    context: ModelContext, assets: Path, *, repair: bool
+) -> BsCudaCacheStatus | None:
+    """Choose the verified package paired with this exact movable Release executable."""
+    from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
+        BS_ONNX_MODELS_DIRECTORY,
+        BS_ONNX_RUNTIME_EXECUTABLE,
+    )
+    from flitzis_looper.bs_onnx_provisioning import (  # noqa: PLC0415
+        stage_bs_onnx_installation,
+        verify_bs_onnx_for_executable,
+    )
+
+    if context.runtime is None:
+        msg = "The private Release runtime is required to establish BS-RoFormer readiness"
+        raise ValueError(msg)
+    package_root = context.root / BS_ONNX_MODELS_DIRECTORY
+    executable = context.runtime / BS_ONNX_RUNTIME_EXECUTABLE
+    if repair:
+        preparations: list[BsCudaCacheStatus] = []
+        stage_bs_onnx_installation(
+            context.checkout,
+            package_root,
+            executable,
+            assets,
+            context.root / "cache/analysis/beat-this-downloads",
+            crt_dir=context.checkout / "src/flitzis_looper_audio",
+            cuda_preparation=preparations.append,
+        )
+        return preparations[0]
+    verify_bs_onnx_for_executable(package_root, executable)
+    return None
+
+
 def check_models(context: ModelContext) -> dict[str, object]:
-    """Finish repairs before the two final fresh, sequential CPU load checks."""
+    """Finish repairs before verifying the two selected model installations."""
     caches = model_cache_dirs(context)
     if context.mode == "repair":
         for separator in caches:
             run_model_child(context, separator, "prepare")
+    bs_cuda_cache = None
     for separator in caches:
-        run_model_child(context, separator, "load")
+        if (
+            separator == "bs-roformer:musdb18hq"
+            and windows_bs_onnx()
+            and not context.source_clone
+            and context.mode == "repair"
+        ):
+            try:
+                bs_cuda_cache = portable_bs_onnx(context, caches[separator], repair=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise ModelCheckError(str(error), separator=separator, stage="load") from error
+        else:
+            run_model_child(context, separator, "load")
+    warmup = bool(bs_cuda_cache and bs_cuda_cache.warmup_executed)
     return {
         "portable_models": "passed",
         "mode": context.mode,
-        "device": "cpu",
+        "device": "cuda" if warmup else "cpu",
+        "inference_executed": warmup,
         "models": {separator: str(cache) for separator, cache in caches.items()},
     }
 
@@ -239,7 +294,20 @@ def run_internal_child(context: ModelContext, separator: str, action: ModelActio
         raise ValueError(msg)
     selected = cast("StemSeparator", separator)
     sys.addaudithook(deny_model_network)
-    operate_model(selected, caches[selected], action)
+    if selected == "bs-roformer:musdb18hq" and action == "load" and windows_bs_onnx():
+        if context.source_clone:
+            from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
+                BS_ONNX_MODELS_DIRECTORY,
+            )
+            from flitzis_looper.bs_onnx_provisioning import (  # noqa: PLC0415
+                selected_bs_onnx_installation,
+            )
+
+            selected_bs_onnx_installation(context.checkout / BS_ONNX_MODELS_DIRECTORY, verify=True)
+        else:
+            portable_bs_onnx(context, caches[selected], repair=False)
+    else:
+        operate_model(selected, caches[selected], action)
 
 
 def main(argv: list[str] | None = None) -> int:

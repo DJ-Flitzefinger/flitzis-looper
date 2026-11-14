@@ -65,7 +65,8 @@ the previous installation selected. A system without usable CUDA can install
 the CPU worker.
 
 [`prepare_models.py`](../scripts/portable/prepare_models.py) independently
-verifies the pinned BS-RoFormer and Demucs files and loads each model on CPU in
+verifies the pinned BS-RoFormer and Demucs files, derives the Windows ONNX
+weights locally and checks each model on CPU in
 its own process before activation. Unchanged-main worker and model repair
 can reuse a healthy Runtime without rebuilding Native.
 [Worker and asset details](model-worker-setup.md) describe both environments.

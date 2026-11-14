@@ -4,6 +4,9 @@ Interpret inert metadata descriptors; never unpickle or execute reducers/classes
 Generated weights are private trial files, not full model/producer provenance.
 """
 
+# The locked ONNX tooling imports this decoder with Python 3.12.
+from __future__ import annotations
+
 import argparse
 import array
 import hashlib

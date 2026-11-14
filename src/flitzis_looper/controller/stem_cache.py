@@ -4,6 +4,7 @@ import os
 import re
 from pathlib import Path
 
+from flitzis_looper.controller.stem_process import stem_cache_io_path
 from flitzis_looper.models import STEM_KINDS, StemCacheEntry, StemFileSet, validate_sample_id
 from flitzis_looper.project_materials import original_asset, resolve_asset
 
@@ -115,7 +116,7 @@ def _file_digest(path: Path) -> str:
     if target is None:
         message = "Stem artifact path contains an unsafe reference"
         raise ValueError(message)
-    with target.open("rb") as artifact:
+    with stem_cache_io_path(target).open("rb") as artifact:
         return hashlib.file_digest(artifact, "sha256").hexdigest()
 
 
@@ -126,15 +127,17 @@ def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) ->
     if private.parent not in {target, target.parent}:
         msg = "Generation artifacts do not belong to the pad's cache directory"
         raise ValueError(msg)
-    if any(not (private / f"{kind}.wav").is_file() for kind in STEM_KINDS):
+    private_io = stem_cache_io_path(private)
+    if any(not (private_io / f"{kind}.wav").is_file() for kind in STEM_KINDS):
         msg = "Stem generation completed but cache files are incomplete"
         raise OSError(msg)
     digests = {kind: _file_digest(private / f"{kind}.wav") for kind in STEM_KINDS}
     published = private.with_name(private.name.replace(".generation-", ".ready-", 1))
-    if published.exists():
+    published_io = stem_cache_io_path(published)
+    if published_io.exists():
         message = "Stem generation already has a published owner"
         raise FileExistsError(message)
-    marker_temp = private / STEM_SET_MARKER_NAME
+    marker_temp = private_io / STEM_SET_MARKER_NAME
     provenance = (
         {
             **(
@@ -158,7 +161,7 @@ def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) ->
         )
         marker.flush()
         os.fsync(marker.fileno())
-    private.rename(published)
+    private_io.rename(published_io)
     cache_dir = published.relative_to(Path.cwd()).as_posix()
     return entry.model_copy(
         update={"cache_dir": cache_dir, "stems": expected_stem_files(cache_dir)}
@@ -172,7 +175,7 @@ def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
         marker_path = target / STEM_SET_MARKER_NAME
         if _safe_stem_cache_dir_path(marker_path.relative_to(Path.cwd()).as_posix()) is None:
             return False
-        marker: object = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker: object = json.loads(stem_cache_io_path(marker_path).read_text(encoding="utf-8"))
         expected = {
             "schema": STEM_SET_MARKER_SCHEMA,
             "source_version": entry.source_version,

@@ -16,6 +16,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper import bs_onnx_provisioning
+from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
+from flitzis_looper.bs_onnx_installation import BS_ONNX_MODELS_DIRECTORY, BS_ONNX_RUNTIME_EXECUTABLE
 from flitzis_looper.controller import bs_roformer_assets, stem_generation
 from flitzis_looper.controller.stem_generation import MODEL_CACHE_DIR_ENV_VAR
 from flitzis_looper.controller.stem_separators import separator_model_cache_dir
@@ -34,6 +37,7 @@ def helper() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    module.windows_bs_onnx = lambda: False
     return module
 
 
@@ -101,6 +105,7 @@ def test_parent_prepares_both_before_sequential_fresh_cpu_checks(
     ]
     assert report["portable_models"] == "passed"
     assert report["device"] == "cpu"
+    assert report["inference_executed"] is False
 
 
 def test_check_mode_loads_without_preparation_and_blocks_after_cpu_failure(
@@ -118,6 +123,61 @@ def test_check_mode_loads_without_preparation_and_blocks_after_cpu_failure(
     runner.assert_called_once()
     command = runner.call_args.args[0]
     assert command[command.index("--child-action") + 1] == "load"
+
+
+def test_windows_model_repair_pairs_package_with_release_worker(
+    helper: ModuleType, context: ModelContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage = Mock()
+    verify = Mock()
+    preparation = BsCudaCacheStatus("ready", "prepared", warmup_executed=True)
+
+    def staged(*_args: object, **options: object) -> None:
+        observe = options["cuda_preparation"]
+        assert callable(observe)
+        observe(preparation)
+
+    stage.side_effect = staged
+    monkeypatch.setattr(bs_onnx_provisioning, "stage_bs_onnx_installation", stage)
+    monkeypatch.setattr(bs_onnx_provisioning, "verify_bs_onnx_for_executable", verify)
+    assets = context.root / "checkpoint-pins"
+    assert context.runtime is not None
+
+    assert helper.portable_bs_onnx(context, assets, repair=True) is preparation
+    stage.assert_called_once()
+    assert stage.call_args.args == (
+        context.checkout,
+        context.root / BS_ONNX_MODELS_DIRECTORY,
+        context.runtime / BS_ONNX_RUNTIME_EXECUTABLE,
+        assets,
+        context.root / "cache/analysis/beat-this-downloads",
+    )
+    assert stage.call_args.kwargs["crt_dir"] == context.checkout / "src/flitzis_looper_audio"
+    verify.assert_not_called()
+
+    stage.reset_mock()
+    helper.portable_bs_onnx(context, assets, repair=False)
+    stage.assert_not_called()
+    verify.assert_called_once_with(
+        context.root / BS_ONNX_MODELS_DIRECTORY,
+        context.runtime / BS_ONNX_RUNTIME_EXECUTABLE,
+    )
+
+
+@pytest.mark.parametrize("warmup", [False, True])
+def test_windows_repair_reports_only_cuda_work_done_by_this_invocation(
+    helper: ModuleType, context: ModelContext, monkeypatch: pytest.MonkeyPatch, *, warmup: bool
+) -> None:
+    monkeypatch.setattr(helper, "windows_bs_onnx", lambda: True)
+    monkeypatch.setattr(helper, "run_model_child", Mock())
+    monkeypatch.setattr(
+        helper,
+        "portable_bs_onnx",
+        Mock(return_value=BsCudaCacheStatus("ready", "ready", warmup_executed=warmup)),
+    )
+    report = helper.check_models(context)
+    assert report["device"] == ("cuda" if warmup else "cpu")
+    assert report["inference_executed"] is warmup
 
 
 def test_prepare_failure_never_starts_any_final_cpu_check(

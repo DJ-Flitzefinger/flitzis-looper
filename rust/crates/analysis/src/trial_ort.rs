@@ -55,13 +55,34 @@ pub(crate) fn commit_observed(
     context: Option<&Context>,
     observe_initialization_failure: impl FnOnce(ort::ErrorCode, &str),
 ) -> Result<Session, String> {
-    let canceler = builder.canceler();
-    let work = || {
+    commit_with(builder.canceler(), context, || {
         builder.commit_from_memory(graph).map_err(|error| {
             observe_initialization_failure(error.code(), error.message());
             error.to_string()
         })
-    };
+    })
+}
+
+#[cfg(all(windows, feature = "native-bs-roformer-worker"))]
+pub(crate) fn commit_file_observed(
+    mut builder: SessionBuilder,
+    graph: &std::path::Path,
+    context: &Context,
+    observe_initialization_failure: impl FnOnce(ort::ErrorCode, &str),
+) -> Result<Session, String> {
+    commit_with(builder.canceler(), Some(context), || {
+        builder.commit_from_file(graph).map_err(|error| {
+            observe_initialization_failure(error.code(), error.message());
+            error.to_string()
+        })
+    })
+}
+
+fn commit_with(
+    canceler: ort::session::builder::LoadCanceler,
+    context: Option<&Context>,
+    work: impl FnOnce() -> Result<Session, String>,
+) -> Result<Session, String> {
     if let Some(context) = context {
         // Cancel the exact native options. Join before releasing options or graph.
         terminate_during(

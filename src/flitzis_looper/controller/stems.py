@@ -19,6 +19,7 @@ from flitzis_looper.controller.asset_lifecycle import (
 )
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORMER_MODEL_NAME
+from flitzis_looper.controller.bs_roformer_onnx import resolve_bs_onnx_manifest
 from flitzis_looper.controller.committed_stem_residency import (
     CommittedStemResidency,
     StemResidencyStatus,
@@ -3423,7 +3424,9 @@ class StemController(BaseController):  # noqa: PLR0904
             for subscriber in current:
                 self._clear_stem_generation_state(subscriber.sample_id)
                 self._session.stem_generation_diagnostics[subscriber.sample_id] = (
-                    "Saved stems differ from the current producer; Generate to replace them"
+                    "BS-RoFormer ONNX compatibility is unverified before Generate"
+                    if resolved.bs_onnx_manifest is not None
+                    else "Saved stems differ from the current producer; Generate to replace them"
                 )
 
     def _select_generation_admission(
@@ -5230,11 +5233,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
         if event is not None:
             calibration = event.result.provider_calibration if event.result is not None else None
-            proven_cost = (
-                job.generation_fingerprint is not None
-                and request.producer_identity is not None
-                and job.producer_identity == request.producer_identity
-            )
+            proven_cost = self._calibration_proven(job, request, event.result)
             if (
                 event.event_type == "success"
                 and calibration is not None
@@ -5248,10 +5247,35 @@ class StemController(BaseController):  # noqa: PLR0904
             self._put_generation_event(event)
 
     @staticmethod
+    def _calibration_proven(
+        job: StemGenerationJob, request: StemGenerationRequest, result: StemGenerationResult | None
+    ) -> bool:
+        if job.generation_fingerprint is None:
+            return False
+        if request.bs_onnx_manifest is not None:
+            return (
+                result is not None
+                and result.calibration_family is not None
+                and result.executed_producer_identity is not None
+                and job.producer_identity == result.executed_producer_identity
+                and not job.playback_blocked.is_set()
+            )
+        return (
+            request.producer_identity is not None
+            and job.producer_identity == request.producer_identity
+        )
+
+    @staticmethod
     def _resolved_processing_request(request: StemGenerationRequest) -> StemGenerationRequest:
+        manifest = (
+            resolve_bs_onnx_manifest(Path.cwd())
+            if os.name == "nt" and request.separator == "bs-roformer:musdb18hq"
+            else None
+        )
         return replace(
             request,
             encoder_executable=resolved_demucs_encoder(request.model_cache_dir),
+            bs_onnx_manifest=manifest,
             native_demucs_cpu=(
                 request.separator == "demucs:htdemucs"
                 and os.environ.get("FLITZIS_HTDEMUCS_NATIVE_CPU") == "1"
@@ -5273,6 +5297,19 @@ class StemController(BaseController):  # noqa: PLR0904
         processing: tuple[SealedProcessingFiles, str | None] | None,
         result: StemGenerationResult,
     ) -> None:
+        if request.bs_onnx_manifest is not None:
+            producer = (
+                result.executed_producer_identity
+                if result.decoder_verified
+                and result.execution is not None
+                and result.execution.backend == "bs-roformer"
+                and result.execution.model_name == BS_ROFORMER_MODEL_NAME
+                and result.execution.device == result.device
+                else None
+            )
+            job.generation_fingerprint = request_fingerprint(request, producer)
+            job.producer_identity = producer if job.generation_fingerprint else None
+            return
         if processing is None:
             return
         processing[0].verify()
