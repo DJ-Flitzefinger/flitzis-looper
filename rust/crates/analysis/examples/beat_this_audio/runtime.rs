@@ -28,7 +28,8 @@ pub const LOAD_POLICY_ENV: &str = "FLITZIS_TRIAL_ORT_LOAD_POLICY";
     windows,
     any(
         feature = "native-beat-this-worker",
-        feature = "native-bs-roformer-worker"
+        feature = "native-bs-roformer-worker",
+        feature = "native-demucs-worker"
     )
 ))]
 pub fn load_worker_crt(

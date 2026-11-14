@@ -3,7 +3,7 @@
 //! normalized-core predictor; it supplies no learned model, runtime or routing.
 
 use super::{
-    Error, checkpoint,
+    Error, InverseEndpoints, checkpoint,
     host::{Statistics, apply},
     hybrid,
     reduction::CpuProfile,
@@ -139,6 +139,14 @@ impl<'a> Workspace<'a> {
 
     pub fn payload_bytes(&self) -> usize {
         self.payload_bytes
+    }
+
+    /// Select the inverse convention of the qualified stock provider.
+    pub fn with_inverse_endpoints(mut self, endpoints: InverseEndpoints) -> Self {
+        for model in &mut self.hybrid {
+            model.set_inverse_endpoints(endpoints);
+        }
+        self
     }
 
     /// Independent HT branch statistics on every full training callback input.

@@ -82,9 +82,28 @@ _HOST_TARGETS = {
     "bs_onnx_vram.py": (("nvml_free_bytes", "_query_free_bytes", "parse_cuda_memory"), ()),
     "beat_cuda_cache.py": (("cuda_device_identity",), ("CudaDeviceIdentity",)),
     "contracts.py": ((), ("WorkerLimits",)),
-    # The legacy selector constructs this adapter. Its release and execution
-    # identity are separate from the guarded legacy producer roles.
     "native_demucs_cpu.py": ((), ("NativeDemucsCpuBackend",)),
+    "htdemucs_onnx.py": (
+        (
+            "_identity",
+            "_approved_release",
+            "_read_approval",
+            "_approved_worker",
+            "_run_codec",
+            "_verified_codec_files",
+            "_outputs",
+            "_encode",
+            "_stage",
+            "_observed_cuda",
+            "_native_cuda_profile_supported",
+            "_separate",
+        ),
+        ("HtdemucsOnnxBackend", "_ReleaseIdentity", "_StagedPcm", "_CudaAttemptError"),
+    ),
+    "htdemucs_onnx_provisioning.py": (
+        ("selected_htdemucs_installation", "htdemucs_crt_witnesses", "_read_selection"),
+        ("HtdemucsInstallation",),
+    ),
     # Explicit acquisition is setup-only; inference executes the pinned verifier.
     "bs_roformer_assets.py": (("verify_model_assets",), ()),
     "encoder_provenance.py": (
@@ -105,6 +124,16 @@ _HOST_TARGETS = {
 _HOST_CONSTANT_TARGETS = {
     "contracts.py": (),
     "native_demucs_cpu.py": (),
+    "htdemucs_onnx.py": (
+        "_SOURCES",
+        "_CODEC_OUTPUT",
+        "_RATE",
+        "_MAX_DECODE_CHANNELS",
+        "_MANIFEST_SHA",
+        "_CUDA_MANIFEST_SHA",
+        "_CUDA_PROVIDER_SHA",
+    ),
+    "htdemucs_onnx_provisioning.py": ("_INSTALLATIONS",),
     "bs_roformer_onnx.py": ("_ONNX_HOST_SOURCES", "_DECODER_SOURCES", "_FFT_PROFILES", "_SOURCES"),
     "bs_onnx_installation.py": ("_CRT_DLLS",),
     "bs_onnx_cuda_cache.py": ("_RECIPE",),

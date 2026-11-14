@@ -8,7 +8,7 @@
 //! apply. The predictor supplies both decoder outputs synchronously.
 
 use super::{
-    BLOCK, Error, Geometry as SpectralGeometry, MAX_WORKING_BYTES, RATE,
+    BLOCK, Error, Geometry as SpectralGeometry, InverseEndpoints, MAX_WORKING_BYTES, RATE,
     Workspace as SpectralWorkspace, checkpoint,
     host::Statistics,
     reduction::{self, CpuProfile},
@@ -176,6 +176,10 @@ impl Workspace {
         };
         checkpoint(cancelled)?;
         Ok(work)
+    }
+
+    pub fn set_inverse_endpoints(&mut self, endpoints: InverseEndpoints) {
+        self.fft.set_inverse_endpoints(endpoints);
     }
 
     /// Compute one eval forward with no host allocations during the call.

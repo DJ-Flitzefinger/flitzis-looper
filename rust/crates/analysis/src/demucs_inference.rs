@@ -1,4 +1,4 @@
-//! Opt-in, synchronous CPU inference for the original HTDemucs release core.
+//! Synchronous inference for the original HTDemucs release core.
 //! The owner provides a fresh disposable process, admitted ORT and readers.
 
 use crate::{
@@ -18,6 +18,14 @@ use ort::{
     value::{Tensor, TensorElementType, TensorRef, ValueType},
 };
 use std::{cell::Cell, path::Path};
+
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+use crate::beat_inference::ModelStartupStage;
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicI32, Ordering},
+};
 
 pub const FRAMES: usize = 343_980;
 pub const STEPS: usize = 336;
@@ -137,6 +145,12 @@ pub struct CpuModel {
     context: Context,
     run_extra: usize,
     run_limit: Option<usize>,
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    cuda: bool,
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    run_failure: Option<(ort::ErrorCode, String)>,
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    group_norm_failure: Option<Arc<AtomicI32>>,
 }
 
 impl CpuModel {
@@ -203,6 +217,12 @@ impl CpuModel {
             context: context.clone(),
             run_extra: payload.run_bytes().map_err(|e| e.to_string())?,
             run_limit: Some(run_limit),
+            #[cfg(all(windows, feature = "native-demucs-worker"))]
+            cuda: false,
+            #[cfg(all(windows, feature = "native-demucs-worker"))]
+            run_failure: None,
+            #[cfg(all(windows, feature = "native-demucs-worker"))]
+            group_norm_failure: None,
         })
     }
 
@@ -213,10 +233,13 @@ impl CpuModel {
         path: &Path,
         release: &Scan64Release,
         context: &Context,
+        cuda_profile: Option<&Path>,
         admit_runtime: impl FnOnce() -> Result<(), String>,
+        mut observe: impl FnMut(ModelStartupStage, ort::ErrorCode, &str),
     ) -> Result<Self, String> {
         let context = context.with_cancel_message(CANCELLED);
         context.checkpoint("demucs.scan64.prepare")?;
+        let group_norm_failure = cuda_profile.map(|_| Arc::new(AtomicI32::new(0)));
         let session =
             super::inline_model::with_read_only(path, release.graph_bytes, &context, |graph| {
                 if trial_ort::sha256(graph, || context.check())? != release.graph_sha256 {
@@ -224,22 +247,54 @@ impl CpuModel {
                 }
                 admit_runtime()?;
                 context.checkpoint("demucs.scan64.load")?;
-                let providers = [ep::CPU::default()
+                let cpu = ep::CPU::default()
                     .with_arena_allocator(false)
                     .build()
-                    .error_on_failure()];
-                let builder = trial_ort::session_builder(&providers)?
-                    .with_no_environment_execution_providers()
-                    .map_err(|e| e.to_string())?
-                    .with_memory_pattern(false)
-                    .map_err(|e| e.to_string())?
-                    .with_optimization_level(GraphOptimizationLevel::Disable)
-                    .map_err(|e| e.to_string())?
-                    .with_config_entry("session.disable_prepacking", "1")
-                    .map_err(|e| e.to_string())?
-                    .with_config_entry("session.load_model_format", "ONNX")
-                    .map_err(|e| e.to_string())?;
-                trial_ort::commit(builder, graph, Some(&context))
+                    .error_on_failure();
+                let providers = if cuda_profile.is_some() {
+                    vec![
+                        ep::CUDA::default()
+                            .with_device_id(0)
+                            .with_tf32(false)
+                            .with_arena_extend_strategy(ep::ArenaExtendStrategy::SameAsRequested)
+                            .build()
+                            .error_on_failure(),
+                        cpu,
+                    ]
+                } else {
+                    vec![cpu]
+                };
+                let builder = trial_ort::session_builder_observed(&providers, |code, message| {
+                    observe(ModelStartupStage::ProviderRegistration, code, message);
+                })?
+                .with_no_environment_execution_providers()
+                .map_err(|e| e.to_string())?
+                .with_memory_pattern(false)
+                .map_err(|e| e.to_string())?
+                .with_optimization_level(GraphOptimizationLevel::Disable)
+                .map_err(|e| e.to_string())?
+                .with_config_entry("session.disable_prepacking", "1")
+                .map_err(|e| e.to_string())?
+                .with_config_entry("session.load_model_format", "ONNX")
+                .map_err(|e| e.to_string())?;
+                let builder = match cuda_profile {
+                    Some(path) => builder
+                        .with_operators(crate::demucs_cuda_group_norm::operators(
+                            &context,
+                            Arc::clone(
+                                group_norm_failure
+                                    .as_ref()
+                                    .ok_or("missing CUDA error observation")?,
+                            ),
+                        )?)
+                        .map_err(|e| e.to_string())?
+                        .with_profiling(path)
+                        .map_err(|e| e.to_string())?,
+                    None => builder,
+                };
+                trial_ort::commit_observed(builder, graph, Some(&context), |code, message| {
+                    observe(ModelStartupStage::SessionInitialization, code, message);
+                })
             })?;
         validate_session(&session, SCAN64_LOWERING, "2.12.0+cpu")?;
         let metadata = session.metadata().map_err(|e| e.to_string())?;
@@ -258,7 +313,23 @@ impl CpuModel {
             context,
             run_extra: 0,
             run_limit: None,
+            cuda: cuda_profile.is_some(),
+            run_failure: None,
+            group_norm_failure,
         })
+    }
+
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    pub fn run_failure(&self) -> Option<(ort::ErrorCode, &str)> {
+        self.run_failure
+            .as_ref()
+            .map(|(code, message)| (*code, message.as_str()))
+    }
+
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    pub fn group_norm_device_failure(&self) -> Option<i32> {
+        let code = self.group_norm_failure.as_ref()?.load(Ordering::Relaxed);
+        (code != 0).then_some(code)
     }
 
     /// Invoke the learned branches on identical original normalized inputs.
@@ -272,6 +343,13 @@ impl CpuModel {
         decoded_time: &mut [f32],
     ) -> Result<(), String> {
         let context = &self.context;
+        #[cfg(all(windows, feature = "native-demucs-worker"))]
+        {
+            self.run_failure = None;
+            if let Some(failure) = &self.group_norm_failure {
+                failure.store(0, Ordering::Relaxed);
+            }
+        }
         context.checkpoint("demucs.model.input")?;
         finite(spectral, SPEC_INPUT_LEN, context)?;
         finite(time, TIME_INPUT_LEN, context)?;
@@ -286,10 +364,14 @@ impl CpuModel {
         let mut binding = self.session.create_binding().map_err(|e| e.to_string())?;
         binding
             .bind_input("spectral", &spectral)
-            .map_err(|e| e.to_string())?;
-        binding
-            .bind_input("waveform", &time)
-            .map_err(|e| e.to_string())?;
+            .and_then(|()| binding.bind_input("waveform", &time))
+            .map_err(|error| {
+                #[cfg(all(windows, feature = "native-demucs-worker"))]
+                if self.cuda {
+                    self.run_failure = Some((error.code(), error.message().to_owned()));
+                }
+                error.to_string()
+            })?;
         let spectral_output = sentinel(SPEC_OUT, SPEC_OUTPUT_LEN, context)?;
         let time_output = sentinel(TIME_OUT, TIME_OUTPUT_LEN, context)?;
         let spectral_ptr = spectral_output.data_ptr();
@@ -313,6 +395,10 @@ impl CpuModel {
                     .run_binding_with_options(&binding, &options)
                     .map_err(|e| {
                         terminated.set(trial_ort::is_run_termination(e.code(), e.message()));
+                        #[cfg(all(windows, feature = "native-demucs-worker"))]
+                        if self.cuda {
+                            self.run_failure = Some((e.code(), e.message().to_owned()));
+                        }
                         e.to_string()
                     })?;
                 context.checkpoint("demucs.model.output")?;
@@ -391,6 +477,12 @@ impl CpuModel {
             &cancelled,
         )
         .map_err(|e| e.to_string())?;
+        #[cfg(all(windows, feature = "native-demucs-worker"))]
+        if self.cuda {
+            work = work.with_inverse_endpoints(
+                flitzis_stem_dsp::demucs::InverseEndpoints::HtDemucsCudaReference,
+            );
+        }
         let mut failure = None;
         let mut predict = |_: usize,
                            g: hybrid::Geometry,

@@ -201,6 +201,7 @@ class Phase(Enum):
     ASSEMBLE = "assemble"
     REWRITE = "rewrite"
     CHECK = "check"
+    CPU_GROUP_NORMALIZATION = "cpu-group-normalization"
 
 
 class SpectralConvolutionBackend(Enum):
@@ -4021,6 +4022,121 @@ def check_graph(
     # The bytes overload keeps custody across the C++ parser and full shape check.
     onnx.checker.check_model(raw, full_check=True)
     return expected
+
+
+def lower_cpu_group_normalization(onnx, model) -> None:
+    """Use stable centered moments at the 74 stock GroupNorm export sites."""
+    nodes = model.graph.node
+    producers = {name: node for node in nodes for name in node.output}
+    prefix = "__htdemucs_group_centered__"
+    if any(name.startswith(prefix) for name in producers):
+        msg = "HTDemucs GroupNorm rewrite namespace is already used"
+        raise ValueError(msg)
+    numpy = import_module("numpy")
+    helper, tensors = onnx.helper, onnx.numpy_helper
+    axes, epsilon = prefix + "axes", prefix + "eps"
+    rewritten = [
+        helper.make_node(
+            "Constant", [], [axes], value=tensors.from_array(numpy.array([-1], dtype=numpy.int64))
+        ),
+        helper.make_node(
+            "Constant",
+            [],
+            [epsilon],
+            value=tensors.from_array(numpy.array(1e-5, dtype=numpy.float64)),
+        ),
+    ]
+    sites = 0
+    for node in nodes:
+        if node.op_type != "InstanceNormalization":
+            rewritten.append(node)
+            continue
+        _check_group_normalization(onnx, node, producers)
+        grouped = node.input[0]
+        sites += 1
+        rewritten.extend(
+            _centered_group_nodes(onnx, node, grouped, axes, epsilon, f"{prefix}{sites}_")
+        )
+    if sites != 74:
+        msg = "Unexpected HTDemucs GroupNorm site count"
+        raise ValueError(msg)
+    del nodes[:]
+    nodes.extend(rewritten)
+
+
+def _centered_group_nodes(onnx, node, grouped, axes, epsilon, tag):
+    helper = onnx.helper
+    precise = tag + "fp64_input"
+    mean = tag + "mean"
+    centered = tag + "centered"
+    square = tag + "square"
+    variance = tag + "var"
+    with_epsilon = tag + "variance_with_epsilon"
+    sigma = tag + "sigma"
+    normalized = tag + "fp64_output"
+    return [
+        helper.make_node("Cast", [grouped], [precise], to=onnx.TensorProto.DOUBLE),
+        helper.make_node("ReduceMean", [precise, axes], [mean], keepdims=1),
+        helper.make_node("Sub", [precise, mean], [centered]),
+        helper.make_node("Mul", [centered, centered], [square]),
+        helper.make_node("ReduceMean", [square, axes], [variance], keepdims=1),
+        helper.make_node("Add", [variance, epsilon], [with_epsilon]),
+        helper.make_node("Sqrt", [with_epsilon], [sigma]),
+        helper.make_node("Div", [centered, sigma], [normalized]),
+        helper.make_node("Cast", [normalized], list(node.output), to=onnx.TensorProto.FLOAT),
+    ]
+
+
+def _check_group_normalization(onnx, node, producers) -> None:
+    helper = onnx.helper
+    grouped, scale, bias = node.input
+    epsilon = 9.999999747378752e-6  # The legacy float32 ONNX attribute for 1e-5.
+    if (
+        node.domain
+        or not node.name.endswith("/InstanceNormalization")
+        or producers[grouped].op_type != "Reshape"
+        or {attr.name: helper.get_attribute_value(attr) for attr in node.attribute}
+        != {"epsilon": epsilon}
+    ):
+        msg = f"Unexpected HTDemucs GroupNorm source: {node.name}"
+        raise ValueError(msg)
+    for port, expected in ((scale, 1), (bias, 0)):
+        constant = producers[port]
+        if constant.op_type != "Constant" or len(constant.attribute) != 1:
+            msg = f"Unexpected HTDemucs GroupNorm affine port: {node.name}"
+            raise ValueError(msg)
+        value = onnx.numpy_helper.to_array(helper.get_attribute_value(constant.attribute[0]))
+        if value.ndim != 1 or value.size == 0 or not (value == expected).all():
+            msg = f"Unexpected HTDemucs GroupNorm affine constant: {node.name}"
+            raise ValueError(msg)
+
+
+def rewrite_cpu_group_normalization(
+    path: Path,
+    expected: Artifact,
+    output: Path,
+    *,
+    overlay: Path,
+    admit: Callable[[Phase], None],
+) -> Artifact:
+    """Rewrite checked Scan64 bytes while retaining the fixed layout and weights."""
+    begin_phase(Phase.CPU_GROUP_NORMALIZATION, admit)
+    onnx = onnx_producer(overlay)
+    model = parse_inline_graph(onnx, read_artifact(path, expected, MAX_GRAPH_BYTES))
+    inspect_graph(onnx, model)
+    attention = scan64_digest(onnx, model)
+    lower_cpu_group_normalization(onnx, model)
+    if scan64_digest(onnx, model) != attention:
+        msg = "HTDemucs GroupNorm rewrite changed the Scan64 attention closure"
+        raise ValueError(msg)
+    payload = model.SerializeToString()
+    if not 0 < len(payload) <= MAX_GRAPH_BYTES:
+        msg = "HTDemucs CPU graph exceeds the inline extent"
+        raise ValueError(msg)
+    onnx.checker.check_model(payload, full_check=True)
+    with output.open("xb") as stream:
+        stream.write(payload)
+    return Artifact(len(payload), hashlib.sha256(payload).hexdigest())
 
 
 def main() -> None:

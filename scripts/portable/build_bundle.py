@@ -1,4 +1,4 @@
-"""Package a Release runtime and the matching BeatThis worker."""
+"""Package a Release runtime and its matching native model workers."""
 
 # Standalone build command.
 import argparse
@@ -475,6 +475,40 @@ def bs_worker_executable(args: argparse.Namespace, output: Path) -> Path:
     return build_bs_onnx_worker(REPO, output / "bs-worker-build")
 
 
+def copy_htdemucs_worker(
+    args: argparse.Namespace, output: Path, runtime: Path, checkout: Path
+) -> None:
+    """Package the HTDemucs worker only for a checkout with complete approvals."""
+    from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
+        HTDEMUCS_RUNTIME_EXECUTABLE,
+        build_htdemucs_onnx_worker,
+        htdemucs_onnx_released,
+        verify_htdemucs_release_worker,
+    )
+
+    executable: Path | None = getattr(args, "htdemucs_worker_executable", None)
+    if not htdemucs_onnx_released(checkout):
+        require(executable is None, "This checkout has no approved HTDemucs worker")
+        return
+    if args.runtime_directory:
+        if executable is None:
+            msg = "Ordinary installs must supply their built HTDemucs worker"
+            raise ValueError(msg)
+        build_target = os.environ.get("CARGO_TARGET_DIR")
+        expected = (
+            Path(build_target) / "x86_64-pc-windows-msvc/release"
+            / Path(HTDEMUCS_RUNTIME_EXECUTABLE).name
+            if build_target else None
+        )
+        require(expected is not None and executable.resolve() == expected.resolve(),
+                "The HTDemucs worker must come from the owned Cargo target")
+    else:
+        require(executable is None, "The ZIP builder compiles its HTDemucs worker from source")
+        executable = build_htdemucs_onnx_worker(REPO, output / "htdemucs-worker-build")
+    verify_htdemucs_release_worker(checkout, executable, source_built=True)
+    copy_worker(runtime, executable, HTDEMUCS_RUNTIME_EXECUTABLE)
+
+
 def stage_bundle_worker(root: Path, runtime: Path, checkout: Path, asset_cache: Path) -> None:
     """Give a standalone ZIP its own complete, relocatable worker selection."""
     report = root / "cache/analysis-package.json"
@@ -668,6 +702,7 @@ def build(args: argparse.Namespace) -> None:
     copy_external_runtime(runtime, checkout, args)
     copy_worker(runtime, beat_worker_executable(args, output), BEAT_WORKER_EXECUTABLE)
     copy_worker(runtime, bs_worker_executable(args, output), BS_WORKER_EXECUTABLE)
+    copy_htdemucs_worker(args, output, runtime, checkout)
     copy_licenses(runtime, args.license_file)
     if not args.runtime_directory:
         stage_bundle_worker(root, runtime, checkout, output / "beat-worker-assets")
@@ -767,6 +802,9 @@ def main() -> None:
         "--beat-worker-executable", type=Path, help="Internal source installer input"
     )
     parser.add_argument("--bs-worker-executable", type=Path, help="Internal source installer input")
+    parser.add_argument(
+        "--htdemucs-worker-executable", type=Path, help="Internal source installer input"
+    )
     parser.add_argument("--native-source-commit", required=True)
     parser.add_argument("--ffmpeg-dir", type=Path, required=True)
     parser.add_argument("--dll-dir", type=Path, action="append", default=[])

@@ -1,8 +1,8 @@
-//! Parameter-free decoder fixture for original HTDemucs forward comparisons.
+//! Decoder fixture and captured tensor replay for HTDemucs host comparisons.
 //! The supervising caller owns the fixture files, process and last readers.
 
 use flitzis_stem_dsp::demucs::{
-    Error,
+    Error, InverseEndpoints,
     host::Statistics,
     hybrid::{BranchStatistics, Geometry, Workspace},
     reduction::CpuProfile,
@@ -35,6 +35,17 @@ fn read_float(reader: &mut impl Read) -> io::Result<f32> {
     Ok(f32::from_le_bytes(bytes))
 }
 
+fn read_floats(reader: &mut impl Read, values: &mut [f32]) -> io::Result<()> {
+    let mut bytes = [0u8; IO_BUFFER_BYTES];
+    for block in values.chunks_mut(bytes.len() / 4) {
+        reader.read_exact(&mut bytes[..block.len() * 4])?;
+        for (value, raw) in block.iter_mut().zip(bytes.chunks_exact(4)) {
+            *value = f32::from_le_bytes(raw.try_into().unwrap());
+        }
+    }
+    Ok(())
+}
+
 fn write_floats(values: &[f32]) -> io::Result<()> {
     let mut writer = io::stdout().lock();
     let mut bytes = [0u8; IO_BUFFER_BYTES];
@@ -49,12 +60,14 @@ fn write_floats(values: &[f32]) -> io::Result<()> {
 
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<_> = std::env::args().skip(1).collect();
-    let independent = args.first().is_some_and(|arg| arg == "independent");
+    let cuda_replay = args.first().is_some_and(|arg| arg == "replay-cuda");
+    let replay = cuda_replay || args.first().is_some_and(|arg| arg == "replay");
+    let independent = replay || args.first().is_some_and(|arg| arg == "independent");
     if independent {
         args.remove(0);
     }
     if args.len() != 5 {
-        return Err("usage: demucs_hybrid BATCH CHANNELS SOURCES FRAMES TRAINING < STATS_AND_PCM_F32 > PCM_F32".into());
+        return Err("usage: demucs_hybrid [independent|replay|replay-cuda] BATCH CHANNELS SOURCES FRAMES TRAINING; stdin contains float32 [supplied statistics] input PCM [captured decoders for replay]".into());
     }
     let g = Geometry::new(
         args[0].parse()?,
@@ -82,18 +95,15 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let mut pcm = payload(g.input_len(), 0.0)?;
-    let mut bytes = [0u8; IO_BUFFER_BYTES];
-    for block in pcm.chunks_mut(bytes.len() / 4) {
-        reader.read_exact(&mut bytes[..block.len() * 4])?;
-        for (value, raw) in block.iter_mut().zip(bytes.chunks_exact(4)) {
-            *value = f32::from_le_bytes(raw.try_into().unwrap());
-        }
-    }
-    if reader.read(&mut bytes[..1])? != 0 {
+    read_floats(&mut reader, &mut pcm)?;
+    if !replay && reader.read(&mut [0])? != 0 {
         return Err("unexpected trailing float32 input".into());
     }
     let mut output = payload(g.output_len(), 0.0)?;
     let mut work = Workspace::new(g, &|| false)?;
+    if cuda_replay {
+        work.set_inverse_endpoints(InverseEndpoints::HtDemucsCudaReference);
+    }
     if independent {
         let profile = CpuProfile::admit(
             "2.12.0+cu130",
@@ -109,6 +119,14 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             &mut |g, spectral, time, ds, dt, cancel| {
                 write_floats(spectral).map_err(|_| Error::Envelope)?;
                 write_floats(time).map_err(|_| Error::Envelope)?;
+                if replay {
+                    read_floats(&mut reader, ds).map_err(|_| Error::Geometry)?;
+                    read_floats(&mut reader, dt).map_err(|_| Error::Geometry)?;
+                    if reader.read(&mut [0]).map_err(|_| Error::Geometry)? != 0 {
+                        return Err(Error::Geometry);
+                    }
+                    return Ok(());
+                }
                 fixture::predict(g, spectral, time, ds, dt, cancel)
             },
             &|| false,
@@ -120,14 +138,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         work.run(&pcm, &stats, &mut output, &mut fixture::predict, &|| false)?;
     }
-    let mut writer = io::stdout().lock();
-    for block in output.chunks(bytes.len() / 4) {
-        for (value, raw) in block.iter().zip(bytes.chunks_exact_mut(4)) {
-            raw.copy_from_slice(&value.to_le_bytes());
-        }
-        writer.write_all(&bytes[..block.len() * 4])?;
-    }
-    writer.flush()?;
+    write_floats(&output)?;
     Ok(())
 }
 

@@ -43,6 +43,11 @@ from flitzis_looper.controller.stem_generation import (
     demucs_cache_environment,
     protected_model_roots,
 )
+from flitzis_looper.htdemucs_onnx_provisioning import (
+    build_htdemucs_onnx_worker,
+    htdemucs_onnx_released,
+    stage_htdemucs_onnx_installation,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.beat_cuda_cache import CudaCacheStatus
@@ -242,6 +247,14 @@ def prepare_stems(root: Path, *, check: bool) -> BsCudaCacheStatus | None:
     else:
         bs_roformer_assets.install_model_assets(roformer)
     prepare_onnx = production_windows() and not check
+    if prepare_onnx and htdemucs_onnx_released(root):
+        scratch = owned_directory(root, ".cache/runtime-setup")
+        stage_htdemucs_onnx_installation(
+            root,
+            cache,
+            build_htdemucs_onnx_worker(root, scratch),
+            scratch / "beat-this-downloads",
+        )
     guarded_check = (
         ["--child-action", "load", "--separator", "demucs:htdemucs"] if prepare_onnx else []
     )

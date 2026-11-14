@@ -24,3 +24,6 @@ assets/models/beat-this/windows-x64/soxr-source/*.xz binary
 
 # HTDemucs worker and App bind the same source-owned approval bytes.
 workers/htdemucs/native_cpu/*.json text eol=lf
+workers/htdemucs/native_cuda/*.json text eol=lf
+workers/htdemucs/*/graph.template binary
+rust/crates/analysis/src/demucs_cuda_group_norm.ptx text eol=lf

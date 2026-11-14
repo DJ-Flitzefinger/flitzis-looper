@@ -19,10 +19,10 @@ pub const WORKING_BYTES: usize = size_of::<[[[f32; LANES]; GROUP]; LEVELS]>()
     + size_of::<[f64; 3]>()
     + size_of::<Statistics>();
 
-/// Windows x64, pinned Torch wheel, AVX512-reported CPU, serial intra-op.
-/// ATen uses eight float lanes for its sum here because the registered sum
-/// kernel falls back to AVX2. Native reproduces the arithmetic order without
-/// importing Torch or issuing AVX instructions.
+/// Serial float32 reduction from the pinned Windows x64 Torch wheel. The
+/// AVX512 dispatch uses the AVX2 sum kernel and DEFAULT uses the generic
+/// vector kernel. Both accumulate across eight float lanes. Native reproduces
+/// their arithmetic order without importing Torch or requiring AVX.
 #[derive(Clone, Copy, Debug)]
 pub struct CpuProfile(());
 
@@ -38,9 +38,26 @@ impl CpuProfile {
         (cfg!(all(windows, target_arch = "x86_64", target_env = "msvc"))
             && torch_version == TORCH_VERSION
             && torch_git == TORCH_GIT
-            && capability == "AVX512"
+            && matches!(capability, "AVX512" | "AVX2" | "DEFAULT")
             && intraop_threads == 1)
             .then_some(Self(()))
+    }
+
+    /// Match the pinned ATen dispatch's x64 feature classes on this host.
+    #[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
+    pub fn host_capability() -> &'static str {
+        if std::is_x86_feature_detected!("fma") {
+            if std::is_x86_feature_detected!("avx512vl")
+                && std::is_x86_feature_detected!("avx512bw")
+                && std::is_x86_feature_detected!("avx512dq")
+            {
+                return "AVX512";
+            }
+            if std::is_x86_feature_detected!("avx2") {
+                return "AVX2";
+            }
+        }
+        "DEFAULT"
     }
 
     /// Correction-one statistics of post-right-pad [B,C,L], reducing C and L
@@ -367,13 +384,15 @@ mod tests {
     fn profile_rejects_unobserved_original_dispatch() {
         let admit =
             |capability, threads| CpuProfile::admit(TORCH_VERSION, TORCH_GIT, capability, threads);
-        assert!(admit("AVX2", 1).is_none());
+        assert!(admit("AVX", 1).is_none());
         assert!(admit("AVX512", 16).is_none());
         assert!(CpuProfile::admit(TORCH_VERSION, "other", "AVX512", 1).is_none());
-        assert_eq!(
-            admit("AVX512", 1).is_some(),
-            cfg!(all(windows, target_arch = "x86_64", target_env = "msvc"))
-        );
+        for capability in ["AVX512", "AVX2", "DEFAULT"] {
+            assert_eq!(
+                admit(capability, 1).is_some(),
+                cfg!(all(windows, target_arch = "x86_64", target_env = "msvc"))
+            );
+        }
     }
 
     #[test]

@@ -64,11 +64,17 @@ CUDA preparation for a detected device, it reports the failure and keeps
 the previous installation selected. A system without usable CUDA can install
 the CPU worker.
 
-[`prepare_models.py`](../scripts/portable/prepare_models.py) independently
-verifies the pinned BS-RoFormer and Demucs files, derives the Windows ONNX
-weights locally and checks each model on CPU in
-its own process before activation. Unchanged-main worker and model repair
-can reuse a healthy Runtime without rebuilding Native.
+[`prepare_models.py`](../scripts/portable/prepare_models.py) verifies the
+pinned model inputs and derives the BS-RoFormer and HTDemucs ONNX graphs
+locally. Setup verifies the locally built Windows HTDemucs worker and
+loads the CPU graph before selecting its immutable installation. Each
+Portable Release uses the installation for its own worker. The HTDemucs
+CUDA path uses the qualified RTX 5090 Laptop GPU profile. Other devices
+use ONNX on CPU. A qualifying CUDA device failure starts a fresh CPU
+attempt.
+
+Unchanged-main worker and model repair can reuse a healthy Runtime without
+rebuilding Native.
 [Worker and asset details](model-worker-setup.md) describe both environments.
 
 Acquisition resumes retained partial downloads and checks full pins before use.

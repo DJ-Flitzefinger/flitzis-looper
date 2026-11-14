@@ -1,5 +1,6 @@
 import hashlib
 import os
+import platform
 import re
 import threading
 import wave
@@ -101,6 +102,7 @@ from flitzis_looper.controller.stem_workers import (
     StemWorkerReservation,
 )
 from flitzis_looper.encoder_provenance import encoder_contract
+from flitzis_looper.htdemucs_onnx_provisioning import htdemucs_onnx_released
 from flitzis_looper.models import (
     STEM_MIX_MODES,
     StemCacheEntry,
@@ -5278,7 +5280,9 @@ class StemController(BaseController):  # noqa: PLR0904
             bs_onnx_manifest=manifest,
             native_demucs_cpu=(
                 request.separator == "demucs:htdemucs"
-                and os.environ.get("FLITZIS_HTDEMUCS_NATIVE_CPU") == "1"
+                and os.name == "nt"
+                and platform.machine().lower() in {"amd64", "x86_64"}
+                and htdemucs_onnx_released(Path(__file__).resolve().parents[3])
             ),
         )
 
@@ -5297,13 +5301,17 @@ class StemController(BaseController):  # noqa: PLR0904
         processing: tuple[SealedProcessingFiles, str | None] | None,
         result: StemGenerationResult,
     ) -> None:
-        if request.bs_onnx_manifest is not None:
+        if request.bs_onnx_manifest is not None or request.native_demucs_cpu:
+            expected = (
+                ("demucs", "htdemucs") if request.native_demucs_cpu
+                else ("bs-roformer", BS_ROFORMER_MODEL_NAME)
+            )
             producer = (
                 result.executed_producer_identity
                 if result.decoder_verified
                 and result.execution is not None
-                and result.execution.backend == "bs-roformer"
-                and result.execution.model_name == BS_ROFORMER_MODEL_NAME
+                and (result.execution.backend, result.execution.model_name) == expected
+                and (not request.native_demucs_cpu or result.encoder_verified)
                 and result.execution.device == result.device
                 else None
             )

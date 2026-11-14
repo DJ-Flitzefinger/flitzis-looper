@@ -51,6 +51,7 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
     sys.path.insert(0, str(checkout / "src"))
     os.environ["PYTHONPATH"] = str(checkout / "src")
     os.chdir(checkout)
+    os.environ["FLITZIS_PORTABLE_RUNTIME"] = str(runtime.absolute())
     os.environ["FLITZIS_MODEL_CACHE_DIR"] = str(root / "models/torch/hub/checkpoints")
     os.environ["TORCH_HOME"] = str(root / "models/torch")
     os.environ["HF_HOME"] = str(root / "models/huggingface")
@@ -1001,6 +1002,37 @@ def check_bs_roformer_runtime(
     }
 
 
+def check_htdemucs_runtime(
+    root: Path, checkout: Path, runtime: Path, *, require_model: bool
+) -> dict[str, object] | None:
+    """Bind an approved HTDemucs Release to its local model installation."""
+    if not (checkout / "workers/htdemucs").exists():
+        return None
+
+    from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
+        HTDEMUCS_RUNTIME_EXECUTABLE,
+        htdemucs_onnx_released,
+        verify_htdemucs_release_worker,
+        verify_selected_htdemucs_onnx,
+    )
+
+    if not htdemucs_onnx_released(checkout.absolute()):
+        return None
+    executable = (runtime / HTDEMUCS_RUNTIME_EXECUTABLE).absolute()
+    if not require_model:
+        verify_htdemucs_release_worker(checkout.absolute(), executable, source_built=True)
+        return {"worker": str(executable), "model_checked": False}
+    package = verify_selected_htdemucs_onnx(
+        checkout.absolute(),
+        root / "models/torch/hub/checkpoints",
+        executable=executable,
+        crt_dir=(checkout / "src/flitzis_looper_audio").absolute(),
+        load=False,
+        verify_assets=False,
+    )
+    return {"worker": str(executable), "model_checked": True, "installation": str(package)}
+
+
 def _candidate_bundle(root: Path) -> bool:
     """A development ZIP contains executable preflight, without Stem model data."""
     marker = root / "portable-root.json"
@@ -1040,9 +1072,9 @@ def check_runtime(
     check_ordinary_transport_api(native_module)
     check_audio_output_api(native_module)
     check_stem_conversion_api(native_module)
-    separator = check_bs_roformer_runtime(
-        root, runtime, require_model=require_analysis and not _candidate_bundle(root)
-    )
+    require_models = require_analysis and not _candidate_bundle(root)
+    separator = check_bs_roformer_runtime(root, runtime, require_model=require_models)
+    demucs = check_htdemucs_runtime(root, checkout, runtime, require_model=require_models)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert customization.__file__ is not None, "Portable sitecustomize has no file origin"
@@ -1099,6 +1131,7 @@ def check_runtime(
             "analysis_checked": require_analysis,
             "analysis": analysis,
             "bs_roformer": separator,
+            **({"htdemucs": demucs} if demucs is not None else {}),
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
@@ -1141,6 +1174,7 @@ def main() -> None:
         from flitzis_looper.ui.run import prepare_ui_state_directory  # noqa: PLC0415
 
         model = check_bs_roformer_runtime(root, runtime, require_model=True)
+        check_htdemucs_runtime(root, checkout, runtime, require_model=True)
         os.environ[BS_ONNX_MANIFEST_ENV] = str(model["manifest"])
         prepare_ui_state_directory()
         run_ui(AppController(beat_this_installation_root=root / "analysis-runtime/beat-this"))

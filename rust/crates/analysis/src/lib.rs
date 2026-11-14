@@ -14,6 +14,8 @@ mod bpm_pipeline;
 #[cfg(all(windows, feature = "native-bs-roformer-worker"))]
 pub mod bs_inference;
 mod canonical_digest;
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+mod demucs_cuda_group_norm;
 #[cfg(feature = "demucs-inference-trial")]
 pub mod demucs_inference;
 mod detection_function;

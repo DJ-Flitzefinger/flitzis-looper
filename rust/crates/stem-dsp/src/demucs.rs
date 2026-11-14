@@ -240,6 +240,18 @@ pub struct Workspace {
     window: Vec<f32>,
     sum: Vec<f32>,
     envelope: Vec<f32>,
+    inverse_endpoints: InverseEndpoints,
+}
+
+/// Interpretation of the learned CaC DC bin in the scale-zero real inverse.
+#[derive(Clone, Copy)]
+pub enum InverseEndpoints {
+    Standard,
+    /// The pinned stock Windows CUDA path folds imaginary DC into negative
+    /// real Nyquist for its batched 4096-point C2R. Stock pads the whole
+    /// Nyquist bin to zero before that inverse, so imaginary Nyquist adds
+    /// nothing to real DC.
+    HtDemucsCudaReference,
 }
 
 impl Workspace {
@@ -261,7 +273,12 @@ impl Workspace {
             window,
             sum: zeros(FFT, "demucs.sum")?,
             envelope: zeros(FFT, "demucs.envelope")?,
+            inverse_endpoints: InverseEndpoints::Standard,
         })
+    }
+
+    fn set_inverse_endpoints(&mut self, endpoints: InverseEndpoints) {
+        self.inverse_endpoints = endpoints;
     }
 
     /// Actual fixed logical work-vector bytes; FFT plan/native backing excluded.
@@ -308,8 +325,8 @@ impl Workspace {
         checkpoint(cancelled)
     }
 
-    /// Direct CaC reconstruction (not multiplicative BS masks). Zero Nyquist and
-    /// two zero time frames on EACH side match `_ispec(scale=0)`. Even zero frames
+    /// Direct CaC reconstruction (not multiplicative BS masks). Pad Nyquist and
+    /// two zero time frames on EACH side as in `_ispec(scale=0)`. Even zero frames
     /// contribute Hann-squared envelope. The rolling ring includes that envelope
     /// and emits exactly g.frames after both original trims, with no whole-track
     /// inverse accumulation. Higher inverse scales and other Demucs families are
@@ -334,8 +351,13 @@ impl Workspace {
                 self.inverse.buffer.fill(Complex32::default());
                 if (2..g.steps + 2).contains(&frame) {
                     let time = frame - 2;
-                    // Real inverse ignores the imaginary DC component.
                     self.inverse.buffer[0].re = spectrum[g.feature(lane, 0, 0, time)];
+                    if matches!(
+                        self.inverse_endpoints,
+                        InverseEndpoints::HtDemucsCudaReference
+                    ) {
+                        self.inverse.buffer[BINS].re = -spectrum[g.feature(lane, 1, 0, time)];
+                    }
                     for frequency in 1..BINS {
                         let value = Complex32::new(
                             spectrum[g.feature(lane, 0, frequency, time)],
@@ -394,6 +416,28 @@ mod tests {
         let large = Geometry::new(20_000_000, 2, RATE).unwrap();
         assert!(large.payload_bytes() > 512 * 1024 * 1024);
         assert!(Geometry::new(705_601, 2, RATE).is_ok());
+    }
+
+    #[test]
+    fn cuda_reference_folds_imaginary_dc_without_changing_standard_inverse() {
+        let g = Geometry::new(FFT, 1, RATE).unwrap();
+        let mut work = Workspace::new(&|| false).unwrap();
+        let mut spectrum = vec![0.0; g.feature_len()];
+        let mut output = vec![0.0; g.pcm_len()];
+        for frame in 0..g.steps() {
+            spectrum[g.feature(0, 1, 0, frame)] = 64.0;
+        }
+        work.reconstruct_into(g, &spectrum, &mut output, &|| false)
+            .unwrap();
+        assert!(output.iter().all(|&sample| sample == 0.0));
+
+        work.set_inverse_endpoints(InverseEndpoints::HtDemucsCudaReference);
+        work.reconstruct_into(g, &spectrum, &mut output, &|| false)
+            .unwrap();
+        for pair in output.chunks_exact(2) {
+            assert!(pair[0] < 0.0 && pair[1] > 0.0);
+        }
+        assert!((output[FFT / 2] + 4.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]

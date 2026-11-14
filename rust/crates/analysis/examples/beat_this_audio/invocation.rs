@@ -250,7 +250,13 @@ impl Invocation {
         )
     }
 
-    #[cfg(all(windows, feature = "native-bs-roformer-worker"))]
+    #[cfg(all(
+        windows,
+        any(
+            feature = "native-bs-roformer-worker",
+            feature = "native-demucs-worker"
+        )
+    ))]
     pub fn finish_stem(
         self,
         result: Result<serde_json::Value, String>,

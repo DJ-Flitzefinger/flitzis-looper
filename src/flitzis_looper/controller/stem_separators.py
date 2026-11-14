@@ -36,9 +36,9 @@ class SelectedStemGenerationBackend:
 
     def __init__(self, backends: dict[StemSeparator, StemGenerationBackend] | None = None) -> None:
         self._native_demucs = NativeDemucsCpuBackend() if backends is None else None
-        self._allows_native_bs = backends is None
+        self._allows_native = backends is None
         self._bs_onnx: BsOnnxStemGenerationBackend | None = None
-        self._bs_onnx_lock = Lock()
+        self._native_lock = Lock()
         self._backends: dict[StemSeparator, StemGenerationBackend] = (
             {
                 "demucs:htdemucs": DemucsStemGenerationBackend(),
@@ -57,9 +57,9 @@ class SelectedStemGenerationBackend:
         if (
             request.separator == "bs-roformer:musdb18hq"
             and request.bs_onnx_manifest is not None
-            and self._allows_native_bs
+            and self._allows_native
         ):
-            with self._bs_onnx_lock:
+            with self._native_lock:
                 if self._bs_onnx is None:
                     # This route has its own provenance contract, independent of
                     # the measured Torch adapter declarations.
@@ -82,6 +82,8 @@ class SelectedStemGenerationBackend:
         if request.bs_onnx_manifest is not None:
             if self._bs_onnx is not None:
                 self._bs_onnx.accept_calibration(request, result)
+            return
+        if request.native_demucs_cpu:
             return
         backend = self._backends.get(request.separator)
         receiver = getattr(backend, "accept_calibration", None)

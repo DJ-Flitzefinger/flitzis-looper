@@ -13,7 +13,7 @@ native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
 native-beat-this-worker = ["native-inference-cuda", "dep:serde", "dep:serde_json"]
 native-bs-roformer-worker = ["native-inference-cuda", "dep:flitzis-stem-dsp", "dep:serde", "dep:serde_json"]
 demucs-inference-trial = ["native-inference-trial", "dep:flitzis-stem-dsp"]
-native-demucs-worker = ["demucs-inference-trial", "native-inference-dynamic", "dep:serde", "dep:serde_json"]
+native-demucs-worker = ["demucs-inference-trial", "native-inference-cuda", "dep:serde", "dep:serde_json"]
 
 [[example]]
 name = "beat_this_native"

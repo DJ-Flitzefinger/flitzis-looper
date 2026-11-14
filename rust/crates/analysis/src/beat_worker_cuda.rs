@@ -28,9 +28,15 @@ pub fn provider() -> flitzis_looper_analysis::beat_inference::Provider {
 pub struct Device {
     name: String,
     driver_api_version: i32,
-    #[cfg(feature = "native-bs-roformer-worker")]
+    #[cfg(any(
+        feature = "native-bs-roformer-worker",
+        feature = "native-demucs-worker"
+    ))]
     uuid: Option<String>,
-    #[cfg(feature = "native-bs-roformer-worker")]
+    #[cfg(any(
+        feature = "native-bs-roformer-worker",
+        feature = "native-demucs-worker"
+    ))]
     luid: Option<([u8; 8], u32)>,
 }
 
@@ -111,9 +117,15 @@ pub fn device(context: &Context, failure: &mut Option<StartupError>) -> Result<D
         Ok(Device {
             name: name.to_owned(),
             driver_api_version,
-            #[cfg(feature = "native-bs-roformer-worker")]
+            #[cfg(any(
+                feature = "native-bs-roformer-worker",
+                feature = "native-demucs-worker"
+            ))]
             uuid: _uuid,
-            #[cfg(feature = "native-bs-roformer-worker")]
+            #[cfg(any(
+                feature = "native-bs-roformer-worker",
+                feature = "native-demucs-worker"
+            ))]
             luid: query_adapter_luid(module, id),
         })
     })();
@@ -355,7 +367,10 @@ pub fn runtime_evidence(device: &Device, receipt: &Value) -> Result<Value, Strin
     }))
 }
 
-#[cfg(feature = "native-bs-roformer-worker")]
+#[cfg(any(
+    feature = "native-bs-roformer-worker",
+    feature = "native-demucs-worker"
+))]
 fn query_adapter_luid(module: *mut c_void, device: i32) -> Option<([u8; 8], u32)> {
     // The selected CUDA device's Windows adapter LUID binds subsequent DXGI
     // telemetry. A driver without this optional query still supports inference.
@@ -371,7 +386,10 @@ fn query_adapter_luid(module: *mut c_void, device: i32) -> Option<([u8; 8], u32)
     (result == 0 && mask != 0 && luid != [0; 8]).then_some((luid, mask))
 }
 
-#[cfg(feature = "native-bs-roformer-worker")]
+#[cfg(any(
+    feature = "native-bs-roformer-worker",
+    feature = "native-demucs-worker"
+))]
 impl Device {
     pub fn luid_and_node_mask(&self) -> Option<([u8; 8], u32)> {
         self.luid

@@ -244,6 +244,45 @@ def portable_bs_onnx(
     return None
 
 
+def windows_htdemucs_onnx(context: ModelContext) -> bool:
+    if not windows_bs_onnx():
+        return False
+    from flitzis_looper.htdemucs_onnx_provisioning import htdemucs_onnx_released  # noqa: PLC0415
+
+    return htdemucs_onnx_released(context.checkout)
+
+
+def portable_htdemucs_onnx(context: ModelContext, checkpoint: Path, *, repair: bool) -> None:
+    """Match HTDemucs readiness to this checkout and its private Release worker."""
+    from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
+        HTDEMUCS_RUNTIME_EXECUTABLE,
+        stage_htdemucs_onnx_installation,
+        verify_selected_htdemucs_onnx,
+    )
+
+    if context.source_clone:
+        verify_selected_htdemucs_onnx(context.checkout, checkpoint)
+        return
+    if context.runtime is None:
+        msg = "The private Release runtime is required to establish HTDemucs readiness"
+        raise ValueError(msg)
+    executable = context.runtime / HTDEMUCS_RUNTIME_EXECUTABLE
+    crt = context.checkout / "src/flitzis_looper_audio"
+    if repair:
+        stage_htdemucs_onnx_installation(
+            context.checkout,
+            checkpoint,
+            executable,
+            context.root / "cache/analysis/beat-this-downloads",
+            crt_dir=crt,
+            portable=True,
+        )
+    else:
+        verify_selected_htdemucs_onnx(
+            context.checkout, checkpoint, executable=executable, crt_dir=crt
+        )
+
+
 def check_models(context: ModelContext) -> dict[str, object]:
     """Finish repairs before verifying the two selected model installations."""
     caches = model_cache_dirs(context)
@@ -251,7 +290,16 @@ def check_models(context: ModelContext) -> dict[str, object]:
         for separator in caches:
             run_model_child(context, separator, "prepare")
     bs_cuda_cache = None
+    prepare_htdemucs = (
+        context.mode == "repair" and not context.source_clone and windows_htdemucs_onnx(context)
+    )
     for separator in caches:
+        if separator == "demucs:htdemucs" and prepare_htdemucs:
+            try:
+                portable_htdemucs_onnx(context, caches[separator], repair=True)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+                raise ModelCheckError(str(error), separator=separator, stage="load") from error
+            continue
         if (
             separator == "bs-roformer:musdb18hq"
             and windows_bs_onnx()
@@ -294,7 +342,16 @@ def run_internal_child(context: ModelContext, separator: str, action: ModelActio
         raise ValueError(msg)
     selected = cast("StemSeparator", separator)
     sys.addaudithook(deny_model_network)
-    if selected == "bs-roformer:musdb18hq" and action == "load" and windows_bs_onnx():
+    if selected == "demucs:htdemucs" and windows_htdemucs_onnx(context):
+        if action == "load":
+            portable_htdemucs_onnx(context, caches[selected], repair=False)
+        else:
+            from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
+                verify_htdemucs_checkpoint,
+            )
+
+            verify_htdemucs_checkpoint(caches[selected])
+    elif selected == "bs-roformer:musdb18hq" and action == "load" and windows_bs_onnx():
         if context.source_clone:
             from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
                 BS_ONNX_MODELS_DIRECTORY,

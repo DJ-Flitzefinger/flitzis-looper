@@ -54,6 +54,7 @@ _OWN_INFERENCE_MODULES = (
     "flitzis_looper.demucs_streaming",
     "flitzis_bs_roformer",
     "flitzis_looper.bs_decode",
+    "flitzis_looper.htdemucs_codec",
 )
 
 
