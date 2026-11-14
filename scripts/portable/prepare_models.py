@@ -256,12 +256,17 @@ def portable_htdemucs_onnx(context: ModelContext, checkpoint: Path, *, repair: b
     """Match HTDemucs readiness to this checkout and its private Release worker."""
     from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
         HTDEMUCS_RUNTIME_EXECUTABLE,
+        htdemucs_source_crt,
+        htdemucs_source_worker,
         stage_htdemucs_onnx_installation,
         verify_selected_htdemucs_onnx,
     )
 
     if context.source_clone:
-        verify_selected_htdemucs_onnx(context.checkout, checkpoint)
+        executable = htdemucs_source_worker(context.checkout / ".cache/runtime-setup")
+        verify_selected_htdemucs_onnx(
+            context.checkout, checkpoint, executable=executable, crt_dir=htdemucs_source_crt()
+        )
         return
     if context.runtime is None:
         msg = "The private Release runtime is required to establish HTDemucs readiness"
@@ -275,7 +280,7 @@ def portable_htdemucs_onnx(context: ModelContext, checkpoint: Path, *, repair: b
             executable,
             context.root / "cache/analysis/beat-this-downloads",
             crt_dir=crt,
-            portable=True,
+            local_build=True,
         )
     else:
         verify_selected_htdemucs_onnx(

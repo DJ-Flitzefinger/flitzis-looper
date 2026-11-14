@@ -53,7 +53,11 @@ from flitzis_looper.encoder_provenance import (
 )
 from flitzis_looper.htdemucs_onnx_provisioning import (
     HTDEMUCS_RUNTIME_EXECUTABLE,
+    HTDEMUCS_SOURCE_CRT_ENV,
+    HTDEMUCS_SOURCE_WORKER_ENV,
     htdemucs_crt_witnesses,
+    htdemucs_source_crt,
+    htdemucs_source_worker,
     selected_htdemucs_installation,
 )
 from flitzis_looper.inference_provider import is_cuda_failure
@@ -403,6 +407,23 @@ def _observed_cuda() -> CudaDeviceIdentity | None:
     return None
 
 
+def _runtime_build() -> tuple[Path | None, Path | None]:
+    package = Path(__file__).resolve().parents[2]
+    if portable := os.environ.get("FLITZIS_PORTABLE_RUNTIME"):
+        return Path(portable) / HTDEMUCS_RUNTIME_EXECUTABLE, package / "flitzis_looper_audio"
+    source = os.environ.get(HTDEMUCS_SOURCE_WORKER_ENV)
+    crt = os.environ.get(HTDEMUCS_SOURCE_CRT_ENV)
+    if source is not None and crt is not None:
+        return Path(source), Path(crt)
+    if source is not None or crt is not None:
+        msg = "The HTDemucs source build requires both worker and CRT bindings"
+        raise StemGenerationError(msg)
+    worker = htdemucs_source_worker(package.parent / ".cache/runtime-setup")
+    if worker.is_file():
+        return worker, htdemucs_source_crt()
+    return None, None
+
+
 class _CudaAttemptError(StemGenerationError):
     """An eligible CUDA failure from the owned worker after retirement."""
 
@@ -521,11 +542,7 @@ class HtdemucsOnnxBackend:
             raise StemGenerationError(msg)
         probe = encoder.with_name("ffprobe.exe")
         cuda_release = _approved_release(cuda=True)
-        portable = os.environ.get("FLITZIS_PORTABLE_RUNTIME")
-        runtime_worker = Path(portable) / HTDEMUCS_RUNTIME_EXECUTABLE if portable else None
-        runtime_crt = (
-            Path(__file__).resolve().parents[2] / "flitzis_looper_audio" if portable else None
-        )
+        runtime_worker, runtime_crt = _runtime_build()
         installation = selected_htdemucs_installation(
             request.model_cache_dir.resolve(),
             release.graph_sha256,

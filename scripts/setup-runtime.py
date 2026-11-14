@@ -46,6 +46,7 @@ from flitzis_looper.controller.stem_generation import (
 from flitzis_looper.htdemucs_onnx_provisioning import (
     build_htdemucs_onnx_worker,
     htdemucs_onnx_released,
+    htdemucs_source_crt,
     stage_htdemucs_onnx_installation,
 )
 
@@ -254,6 +255,8 @@ def prepare_stems(root: Path, *, check: bool) -> BsCudaCacheStatus | None:
             cache,
             build_htdemucs_onnx_worker(root, scratch),
             scratch / "beat-this-downloads",
+            crt_dir=htdemucs_source_crt(),
+            local_build=True,
         )
     guarded_check = (
         ["--child-action", "load", "--separator", "demucs:htdemucs"] if prepare_onnx else []

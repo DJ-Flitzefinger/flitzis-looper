@@ -35,6 +35,8 @@ from flitzis_looper_audio import SealedProcessingFiles
 
 NATIVE_DEMUCS_EXECUTABLE = "native-htdemucs-worker.exe"
 HTDEMUCS_RUNTIME_EXECUTABLE = f"runtime/htdemucs/{NATIVE_DEMUCS_EXECUTABLE}"
+HTDEMUCS_SOURCE_WORKER_ENV = "FLITZIS_HTDEMUCS_SOURCE_WORKER"
+HTDEMUCS_SOURCE_CRT_ENV = "FLITZIS_HTDEMUCS_SOURCE_CRT"
 _CPU_ASSETS = Path("workers/htdemucs/native_cpu")
 _CUDA_ASSETS = Path("workers/htdemucs/native_cuda")
 _INSTALLATIONS = "native-htdemucs"
@@ -423,6 +425,18 @@ def _load_cpu(directory: Path, scratch: Path, release: _Release) -> None:
         raise ValueError(msg)
 
 
+def htdemucs_source_worker(scratch: Path) -> Path:
+    """Resolve the standalone executable from a caller-owned Cargo build directory."""
+    return scratch / "native-htdemucs-build" / _TARGET / "release" / NATIVE_DEMUCS_EXECUTABLE
+
+
+def htdemucs_source_crt() -> Path:
+    """Resolve the same official toolchain CRT used by standalone Source setup."""
+    from flitzis_looper.analysis.native_provisioning import _visual_cpp_runtime  # noqa: PLC0415
+
+    return _visual_cpp_runtime()
+
+
 def build_htdemucs_onnx_worker(
     repository: Path, scratch: Path, *, cargo: str | Path = "cargo"
 ) -> Path:
@@ -459,7 +473,7 @@ def build_htdemucs_onnx_worker(
         cwd=repository,
         check=True,
     )
-    return target / _TARGET / "release" / NATIVE_DEMUCS_EXECUTABLE
+    return htdemucs_source_worker(scratch)
 
 
 def _hydrate(repository: Path, checkpoint_cache: Path, stage: Path, graph: _Graph) -> None:
@@ -635,9 +649,9 @@ def stage_htdemucs_onnx_installation(
     *,
     crt_dir: Path | None = None,
     offline: bool = False,
-    portable: bool = False,
+    local_build: bool = False,
 ) -> Path:
-    """Derive, verify and select a package for an installer-owned checkout build."""
+    """Publish a checkout build only when its executable and CRT have independent owners."""
     from flitzis_looper.analysis.native_provisioning import (  # noqa: PLC0415
         _require_windows_x64,
         _visual_cpp_runtime,
@@ -645,10 +659,12 @@ def stage_htdemucs_onnx_installation(
 
     _require_windows_x64()
     release = _release(repository)
-    if not portable:
+    if not local_build:
         _verify_release_worker(executable, release)
     worker_sha256, worker_bytes = (
-        _worker_identity(executable) if portable else (release.worker_sha256, release.worker_bytes)
+        _worker_identity(executable)
+        if local_build
+        else (release.worker_sha256, release.worker_bytes)
     )
     crt = crt_dir if crt_dir is not None else _visual_cpp_runtime()
     root = checkpoint_cache / _INSTALLATIONS
@@ -660,8 +676,8 @@ def stage_htdemucs_onnx_installation(
     pointer = _selection_path(
         root,
         key,
-        worker_sha256 if portable else None,
-        hashlib.sha256(_crt_metadata(crt)).hexdigest() if portable else None,
+        worker_sha256 if local_build else None,
+        hashlib.sha256(_crt_metadata(crt)).hexdigest() if local_build else None,
     )
     _ordinary(pointer.with_name(pointer.name + ".lock"))
     with _download_lock(pointer), TemporaryDirectory(prefix=".staging-", dir=root) as stage_root:
@@ -670,7 +686,9 @@ def stage_htdemucs_onnx_installation(
         scratch.mkdir()
 
         try:
-            installed = _installed(checkpoint_cache, release, crt, executable if portable else None)
+            installed = _installed(
+                checkpoint_cache, release, crt, executable if local_build else None
+            )
         except FileNotFoundError, ValueError:
             # Stage repair in a fresh generation. Existing readers retain their files.
             pass

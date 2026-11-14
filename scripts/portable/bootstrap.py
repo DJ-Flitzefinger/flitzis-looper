@@ -38,6 +38,8 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
     for name in tuple(os.environ):
         if name.startswith("FLITZIS_WORKSPACE") or name in {
             "FLITZIS_NATIVE_EXTENSION_DIR",
+            "FLITZIS_HTDEMUCS_SOURCE_WORKER",
+            "FLITZIS_HTDEMUCS_SOURCE_CRT",
             "FLITZIS_BEAT_THIS_ROOT",
             "FLITZIS_BS_ROFORMER_ONNX_MANIFEST",
             "FLITZIS_RUNTIME_ACTIVE",

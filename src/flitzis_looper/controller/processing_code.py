@@ -97,11 +97,18 @@ _HOST_TARGETS = {
             "_observed_cuda",
             "_native_cuda_profile_supported",
             "_separate",
+            "_runtime_build",
         ),
         ("HtdemucsOnnxBackend", "_ReleaseIdentity", "_StagedPcm", "_CudaAttemptError"),
     ),
     "htdemucs_onnx_provisioning.py": (
-        ("selected_htdemucs_installation", "htdemucs_crt_witnesses", "_read_selection"),
+        (
+            "selected_htdemucs_installation",
+            "htdemucs_crt_witnesses",
+            "htdemucs_source_worker",
+            "htdemucs_source_crt",
+            "_read_selection",
+        ),
         ("HtdemucsInstallation",),
     ),
     # Explicit acquisition is setup-only; inference executes the pinned verifier.
