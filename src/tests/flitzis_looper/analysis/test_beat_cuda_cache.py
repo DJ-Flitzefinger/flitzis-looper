@@ -41,6 +41,9 @@ def worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> NativeWorkerConfi
 def test_warmup_reuses_cache_across_owners_and_relocation(
     worker: NativeWorkerConfiguration, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # This test exercises an installation-local cache. The fake worker writes
+    # short filenames, so keep pytest's temporary root depth out of selection.
+    monkeypatch.setattr(cache._Cache, "fits_windows", lambda _cache: True)
     calls = []
     started = Event()
     let_complete = Event()
