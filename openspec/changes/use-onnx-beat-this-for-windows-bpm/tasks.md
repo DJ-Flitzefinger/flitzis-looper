@@ -5,4 +5,4 @@
   complete-source temporary preparation against current host resources.
 - [x] Prepare and reuse the installation-owned CUDA cache.
 - [x] Verify the integrated build, setup, and focused ownership contracts.
-- [ ] Complete live acceptance with the operator.
+- [x] Complete live acceptance with the operator (2026-11-14).
