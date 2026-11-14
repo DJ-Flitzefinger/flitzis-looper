@@ -55,6 +55,47 @@ def _license_builder() -> ModuleType:
     return builder
 
 
+def test_installer_packages_htdemucs_without_importing_the_application(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder = _license_builder()
+    # The installer syncs dependencies without installing the project.
+    monkeypatch.setitem(sys.modules, "flitzis_looper.htdemucs_onnx_provisioning", None)
+    cargo_target = tmp_path / "cargo"
+    worker = cargo_target / "x86_64-pc-windows-msvc/release/native-htdemucs-worker.exe"
+    worker.parent.mkdir(parents=True)
+    worker.write_bytes(b"installer-built worker")
+    runtime = tmp_path / "Runtime"
+    args = argparse.Namespace(runtime_directory=runtime, htdemucs_worker_executable=worker)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(cargo_target))
+
+    executable = builder.htdemucs_worker_executable(args, tmp_path)
+    builder.copy_worker(runtime, executable, builder.HTDEMUCS_WORKER_EXECUTABLE)
+
+    staged_worker = runtime / "runtime/htdemucs/native-htdemucs-worker.exe"
+    assert staged_worker.read_bytes() == worker.read_bytes()
+
+    foreign_worker = tmp_path / worker.name
+    foreign_worker.write_bytes(worker.read_bytes())
+    args.htdemucs_worker_executable = foreign_worker
+    with pytest.raises(ValueError, match="owned Cargo target"):
+        builder.htdemucs_worker_executable(args, tmp_path)
+
+
+def test_bootstrap_loads_importlib_util_in_a_fresh_interpreter() -> None:
+    script = Path(__file__).resolve().parents[2] / "scripts/portable/bootstrap.py"
+    probe = (
+        "import sys\n"
+        "assert 'importlib.util' not in sys.modules\n"
+        "script = sys.argv[1]\n"
+        "namespace = {'__name__': 'bootstrap_probe'}\n"
+        "with open(script, 'rb') as source:\n"
+        "    exec(compile(source.read(), script, 'exec'), namespace)\n"
+        "assert namespace['importlib'].util.spec_from_file_location('probe', script)\n"
+    )
+    subprocess.run([sys.executable, "-I", "-S", "-B", "-c", probe, str(script)], check=True)
+
+
 def test_tracked_licenses_and_provenance_are_copied_byte_exactly(tmp_path: Path) -> None:
     builder = _license_builder()
     staging = tmp_path / "staging"

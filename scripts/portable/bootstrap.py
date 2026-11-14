@@ -3,7 +3,7 @@
 # Standalone entrypoint copied into each runtime.
 import argparse
 import ctypes
-import importlib
+import importlib.util
 import inspect
 import json
 import os

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import sysconfig
@@ -57,6 +58,7 @@ NATIVE_ENTRY = "flitzis_looper_audio/" + NATIVE_NAME
 WHEEL_TAG = "cp314-cp314-win_amd64"
 BEAT_WORKER_EXECUTABLE = Path("runtime/beat-this/native-beat-this-worker.exe")
 BS_WORKER_EXECUTABLE = Path("runtime/bs-roformer/native-bs-roformer-worker.exe")
+HTDEMUCS_WORKER_EXECUTABLE = Path("runtime/htdemucs/native-htdemucs-worker.exe")
 NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
 RUNTIME_REDISTRIBUTION_RECORD = "windows-runtime-redistribution.json"
 # Keep these literals readable by the legacy inventory parser.
@@ -395,6 +397,9 @@ def copy_worker(runtime: Path, executable: Path, relative: str | Path) -> None:
         and not any(
             path.is_symlink() or path.is_junction() for path in (executable, *executable.parents)
         )
+        and not (
+            getattr(executable.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        )
         and 0 < executable.stat().st_size <= 64 * 1024 * 1024,
         f"Use the matching Windows x64 Release worker executable: {executable.name}",
     )
@@ -429,38 +434,34 @@ def bs_worker_executable(args: argparse.Namespace, output: Path) -> Path:
     return build_bs_onnx_worker(REPO, output / "bs-worker-build")
 
 
-def copy_htdemucs_worker(
-    args: argparse.Namespace, output: Path, runtime: Path, checkout: Path
-) -> None:
-    """Package the checkout's approved HTDemucs worker."""
-    from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
-        HTDEMUCS_RUNTIME_EXECUTABLE,
-        build_htdemucs_onnx_worker,
-        verify_htdemucs_release_worker,
-    )
-
-    executable: Path | None = getattr(args, "htdemucs_worker_executable", None)
+def htdemucs_worker_executable(args: argparse.Namespace, output: Path) -> Path:
+    """Select the installer-built or locally compiled HTDemucs Release executable."""
+    executable: Path | None = args.htdemucs_worker_executable
     if args.runtime_directory:
-        if executable is None:
-            msg = "Ordinary installs must supply their built HTDemucs worker"
-            raise ValueError(msg)
+        require(executable is not None, "Ordinary installs must supply their built HTDemucs worker")
+        assert executable is not None
         build_target = os.environ.get("CARGO_TARGET_DIR")
         expected = (
-            Path(build_target)
-            / "x86_64-pc-windows-msvc/release"
-            / Path(HTDEMUCS_RUNTIME_EXECUTABLE).name
+            Path(build_target) / "x86_64-pc-windows-msvc/release" / HTDEMUCS_WORKER_EXECUTABLE.name
             if build_target
             else None
         )
         require(
-            expected is not None and executable.resolve() == expected.resolve(),
+            expected is not None
+            and executable.is_absolute()
+            and ".." not in executable.parts
+            and executable.name == HTDEMUCS_WORKER_EXECUTABLE.name
+            and executable.resolve() == expected.resolve(),
             "The HTDemucs worker must come from the owned Cargo target",
         )
-    else:
-        require(executable is None, "The ZIP builder compiles its HTDemucs worker from source")
-        executable = build_htdemucs_onnx_worker(REPO, output / "htdemucs-worker-build")
-    verify_htdemucs_release_worker(checkout, executable, source_built=True)
-    copy_worker(runtime, executable, HTDEMUCS_RUNTIME_EXECUTABLE)
+        # Preflight verifies the copied worker using the staged Python and Native DLLs.
+        return executable
+    require(executable is None, "The ZIP builder compiles its HTDemucs worker from source")
+    from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
+        build_htdemucs_onnx_worker,
+    )
+
+    return build_htdemucs_onnx_worker(REPO, output / "htdemucs-worker-build")
 
 
 def stage_bundle_worker(root: Path, runtime: Path, checkout: Path, asset_cache: Path) -> None:
@@ -656,7 +657,7 @@ def build(args: argparse.Namespace) -> None:
     copy_external_runtime(runtime, checkout, args)
     copy_worker(runtime, beat_worker_executable(args, output), BEAT_WORKER_EXECUTABLE)
     copy_worker(runtime, bs_worker_executable(args, output), BS_WORKER_EXECUTABLE)
-    copy_htdemucs_worker(args, output, runtime, checkout)
+    copy_worker(runtime, htdemucs_worker_executable(args, output), HTDEMUCS_WORKER_EXECUTABLE)
     copy_licenses(runtime, args.license_file)
     if not args.runtime_directory:
         stage_bundle_worker(root, runtime, checkout, output / "beat-worker-assets")
