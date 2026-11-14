@@ -7,5 +7,5 @@
 - [x] Verify actual CUDA placement, qualified CPU retry and process, tree and reader retirement.
 - [x] Measure cold, warm and restarted workers from Generate through the complete aligned set.
 - [x] Integrate verified Source, local release and Portable installation and rollback.
-- [ ] Perform frozen-diff systems and independent review, focused integration checks and outer launch check.
-- [ ] Obtain live acceptance for Generate, Generate All, playback and save/restore.
+- [x] Perform frozen-diff systems and independent review, focused integration checks and outer launch check.
+- [x] Obtain live acceptance for Generate, Generate All, stem and instrumental playback, and save and restore.
