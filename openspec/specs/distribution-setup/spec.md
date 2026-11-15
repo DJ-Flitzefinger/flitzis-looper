@@ -76,8 +76,9 @@ worker with synthetic 48 kHz mono inputs of 30.25, 162 and 8 seconds in order.
   without executing inference.
 
 ### Requirement: Windows Stem Setup Binds Verified Derived Resources
-Source, managed Release and Portable SHALL select local pinned model resources
-derived from complete verified upstream inputs. Learned weights SHALL stay in
+On Windows x64, Source, managed Release and Portable SHALL use the qualified
+native ONNX workers. They SHALL select local pinned stem model resources derived
+from complete verified upstream inputs. Learned weights SHALL stay in
 the acquisition and local derivation path. Setup SHALL verify worker identity,
 runtime, graphs, derived learned data and the matching CRT before publishing the
 selection. The resources SHALL use installation-appropriate owned paths.

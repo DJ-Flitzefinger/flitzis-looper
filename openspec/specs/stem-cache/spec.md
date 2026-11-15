@@ -80,6 +80,11 @@ version.
 - **THEN** the pad remains usable with full-mix playback
 - **AND** missing stem files do not crash load, unload, or playback
 
+#### Scenario: A verified saved stem set is restored
+- **GIVEN** a saved set with verified source and cache identities
+- **WHEN** the project restores the assignment
+- **THEN** the existing adoption path restores it without model inference
+
 
 <!-- From add-offline-stem-cache -->
 ### Requirement: Shared Stem Material Has Independent Assignment And Reader Custody
@@ -149,8 +154,8 @@ events, corrupt full-mix sample buffers, or require special recovery from the pe
 <!-- From add-offline-stem-cache -->
 ### Requirement: Production Stem Generation Uses A Replaceable Backend
 The system SHALL route production stem generation through a file/artifact backend
-boundary before cached stem artifacts are eligible for publication. Windows x64
-SHALL use the qualified native ONNX worker for the selected separator.
+boundary before cached stem artifacts are eligible for publication. On Windows x64,
+both saved separator choices SHALL use their qualified native ONNX workers.
 
 The request SHALL capture the source path and version, target cache and audio
 geometry, pinned model installation, device policy and bounded model settings.

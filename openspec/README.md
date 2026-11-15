@@ -13,7 +13,9 @@ the later audio-output and performance-isolation changes and their remaining gat
 The November 14 ONNX cutovers for [Beat This](changes/archive/2026-11-14-use-onnx-beat-this-for-windows-bpm/),
 [BS-RoFormer](changes/archive/2026-11-14-use-onnx-bs-roformer-for-windows-stems/) and
 [HTDemucs](changes/archive/2026-11-14-use-onnx-htdemucs-for-windows-stems/) retain their
-original implementation and acceptance records. Current requirements live in the base specs.
+original implementation and acceptance records. The completed
+[retirement of the Torch runtime](changes/archive/2026-11-15-remove-torch-runtime/)
+records the final move to native ONNX workers. Current requirements live in the base specs.
 
 Archival is not implementation or acceptance. No historical execution queue is
 activated, no conflicting deltas were merged wholesale, and retired source-SYNC
