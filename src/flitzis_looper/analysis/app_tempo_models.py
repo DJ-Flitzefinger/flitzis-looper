@@ -201,7 +201,7 @@ class AppTempoMethod(BaseModel):
             self.execution is None
             and self.schema_version == 11
             and self.approximate_tempo is not None
-            and self.approximate_tempo.kind == "source_energy"
+            and self.approximate_tempo.kind in {"source_energy", "qm_beat_intervals"}
             and self.approximate_tempo.original is None
         )
         if (native_execution and not native_frontend) or (

@@ -1,6 +1,7 @@
 """Replay scalar-only approximate tempo evidence; never certify beat phase."""
 
 import math
+import struct
 from itertools import pairwise
 from operator import itemgetter
 from statistics import median
@@ -41,12 +42,19 @@ class EnergyWindow(BaseModel):
 class ApproximateTempo(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    kind: Literal["neural_period", "neural_intervals", "source_energy"]
+    kind: Literal["neural_period", "neural_intervals", "source_energy", "qm_beat_intervals"]
     original: PreciseHeader | None
     precise_rejection: Annotated[str, Field(min_length=1, max_length=512)]
     period_seconds: Annotated[float, Field(allow_inf_nan=False, ge=0.2, le=2)]
     range_constraint: FallbackRangeConstraint | None
     energy_windows: Annotated[list[EnergyWindow], Field(max_length=3)]
+    qm_beat_frames: (
+        Annotated[
+            list[Annotated[float, Field(allow_inf_nan=False, ge=0)]],
+            Field(min_length=5, max_length=250_000),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def _invalid(message: str) -> NoReturn:
@@ -156,6 +164,27 @@ def _source_energy_period(method: AppTempoMethod, evidence: ApproximateTempo) ->
     return energy_period(evidence.energy_windows, method.sample_rate_hz)
 
 
+def _validate_conventional(method: AppTempoMethod, evidence: ApproximateTempo) -> None:
+    beats = evidence.qm_beat_frames
+    if beats is None or evidence.energy_windows or evidence.original is not None:
+        _invalid("Conventional tempo requires its separate QM observations")
+    # The legacy QM default uses a 512-sample hop at 44.1 kHz and emits binary32 BPM.
+    analyzer_frames = -(-method.frame_count * 44_100 // method.sample_rate_hz)
+    if (
+        beats[-1] >= analyzer_frames / 512
+        or not all(beat.is_integer() for beat in beats)
+        or any(b <= a for a, b in pairwise(beats))
+    ):
+        _invalid("Conventional QM observations differ from their source geometry")
+    mean_frames = _ordered_sum(b - a for a, b in pairwise(beats)) / (len(beats) - 1)
+    interval = mean_frames * (512 / 44_100)
+    if not 0.19 <= interval <= 2.01:
+        _invalid("Conventional QM average interval is out of range")
+    bpm = struct.unpack("!f", struct.pack("!f", 60.0 / interval))[0]
+    if method.bpm != bpm or evidence.period_seconds != 60.0 / bpm:
+        _invalid("Conventional BPM differs from its QM observations")
+
+
 def validate_approximate(
     method: AppTempoMethod, validate_original: Callable[[AppTempoMethod], None]
 ) -> None:
@@ -167,8 +196,8 @@ def validate_approximate(
     if header is not None:
         original = method.model_copy(update=header.model_dump() | {"approximate_tempo": None})
         validate_original(original)
-    elif evidence.kind != "source_energy" or any((
-        method.execution,
+    elif evidence.kind not in {"source_energy", "qm_beat_intervals"} or any((
+        method.execution if evidence.kind != "qm_beat_intervals" else None,
         method.raw_beats,
         method.raw_downbeats,
         method.ordinal_fit,
@@ -177,7 +206,23 @@ def validate_approximate(
         method.selected,
     )):
         _invalid("Unavailable inference cannot invent neural observations or execution")
+    bounds = evidence.range_constraint
+    bpm = method.bpm
+    if bpm is None or (bounds is not None and not bounds.minimum_bpm <= bpm <= bounds.maximum_bpm):
+        _invalid("Approximate BPM lies outside its captured request range")
+    if evidence.kind == "qm_beat_intervals":
+        _validate_conventional(method, evidence)
+    else:
+        _validate_existing_candidate(method, evidence, bpm)
+
+
+def _validate_existing_candidate(
+    method: AppTempoMethod, evidence: ApproximateTempo, bpm: float
+) -> None:
+    if evidence.qm_beat_frames is not None:
+        _invalid("Approximate evidence has unexpected QM observations")
     period: float | None
+    header = evidence.original
     preferred = _neural_choice(method, header.schema_version) if header is not None else None
     if preferred is not None:
         if evidence.kind != preferred[0]:
@@ -189,12 +234,8 @@ def validate_approximate(
         period = None
     if evidence.kind != "source_energy" and evidence.energy_windows:
         _invalid("Neural approximate evidence cannot carry source-energy windows")
-    bpm = method.bpm
-    if period is None or bpm is None or evidence.period_seconds != period or bpm != 60.0 / period:
+    if period is None or evidence.period_seconds != period or bpm != 60.0 / period:
         _invalid("Approximate scalar differs from its source evidence")
-    bounds = evidence.range_constraint
-    if bounds is not None and not bounds.minimum_bpm <= bpm <= bounds.maximum_bpm:
-        _invalid("Approximate BPM lies outside its captured request range")
 
 
 def from_saved(

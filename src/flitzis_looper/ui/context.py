@@ -240,11 +240,12 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
         if method is not None and method.schema_version in {6, 7, 8, 9, 10, 11}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
-            if (
-                method.approximate_tempo is not None
-                and method.approximate_tempo.kind == "source_energy"
-            ):
-                return "Coarse CPU"
+            approximate = method.approximate_tempo
+            if approximate is not None and approximate.kind in {
+                "source_energy",
+                "qm_beat_intervals",
+            }:
+                return "QM CPU" if approximate.kind == "qm_beat_intervals" else "Coarse CPU"
             if method.nominal_selection is not None:
                 return f"NN {bpm_device_label(method.execution)}; QM CPU; prior CPU"
             has_qm = (

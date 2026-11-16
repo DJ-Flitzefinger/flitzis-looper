@@ -471,8 +471,14 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
 
 def _fallback_bpm_guidance(method: AppTempoMethod) -> str:
     if method.approximate_tempo is not None:
+        source = (
+            "Conventional QM beat tracking supplied this estimate. "
+            if method.approximate_tempo.kind == "qm_beat_intervals"
+            else ""
+        )
         return (
             "Approximate BPM · may be inaccurate. Precise automatic detection failed. "
+            f"{source}"
             "This value does not establish beat or downbeat phase; fixed loops may drift. "
             "Verify with /2, x2 or Tap BPM."
         )

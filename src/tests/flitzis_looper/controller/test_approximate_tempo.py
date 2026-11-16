@@ -110,6 +110,48 @@ def test_unavailable_native_worker_keeps_replayable_source_energy_and_its_error(
         AppTempoMethod.model_validate(method_data | {"model_sha256": "c" * 64}, strict=True)
 
 
+def test_conventional_scalar_replays_and_warns_on_pad(controller: AppController) -> None:
+    bpm = 120.18531799316406
+    data = {
+        "schema_version": 11,
+        "backend": "source_approximate",
+        "policy": "source-approximate-tempo-v11",
+        "status": "approximate_estimate",
+        "bpm": bpm,
+        "selected": None,
+        "regions": [],
+        "model_sha256": NATIVE_MODEL.sha256,
+        "frontend_id": NATIVE_MODEL.frontend_id,
+        "source_sha256": "a" * 64,
+        "mono_sha256": "b" * 64,
+        "sample_rate_hz": 44_100,
+        "frame_count": 308_700,
+        "raw_beats": [],
+        "raw_downbeats": [],
+        "approximate_tempo": {
+            "kind": "qm_beat_intervals",
+            "original": None,
+            "precise_rejection": "Neural tempo estimate uncorroborated",
+            "period_seconds": 60.0 / bpm,
+            "range_constraint": None,
+            "energy_windows": [],
+            "qm_beat_frames": [20.0, 63.0, 106.0, 149.0, 192.0],
+        },
+    }
+    method = AppTempoMethod.model_validate(data, strict=True)
+    candidate = analysis(method)
+    restored = SampleAnalysis.model_validate_json(candidate.model_dump_json())
+    controller.project.sample_analysis[0] = restored
+    pad = UiContext(controller).state.pads
+    assert pad.bpm_drift_warning(0) == "Approximate BPM"
+    assert pad.bpm_execution_label(0) == "QM CPU"
+    assert "Conventional QM beat tracking" in sidebar_left.bpm_estimate_guidance(method)
+    assert restored.beat_grid == BeatGrid(beats=[], downbeats=[], bars=[])
+    assert restored.accepted_timing is None
+    with pytest.raises(ValidationError, match="differs from its QM observations"):
+        AppTempoMethod.model_validate(data | {"bpm": 121.0}, strict=True)
+
+
 @pytest.mark.parametrize(
     "damage", ["scalar", "period", "original", "range", "source_kind", "selection", "extra"]
 )
@@ -187,6 +229,20 @@ def test_fresh_loaded_invalid_approximate_cannot_publish_unproven_scalar(
     with pytest.raises(ValueError, match="Fresh BPM provenance"):
         controller.loader._apply_loaded_analysis(0, data)
     assert controller.project.sample_analysis[0] is None
+
+
+def test_fresh_unavailable_bpm_preserves_existing_loaded_tempo(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    previous = analysis(_v4_method())
+    controller.project.sample_analysis[0] = previous
+    audio_engine_mock.set_pad_bpm.reset_mock()
+    controller.loader._apply_loaded_analysis(
+        0,
+        {"bpm": 0.0, "key": previous.key, "beat_grid": {"beats": [], "downbeats": [], "bars": []}},
+    )
+    assert controller.project.sample_analysis[0] is previous
+    audio_engine_mock.set_pad_bpm.assert_not_called()
 
 
 def test_saved_packet_does_not_mutate_original() -> None:

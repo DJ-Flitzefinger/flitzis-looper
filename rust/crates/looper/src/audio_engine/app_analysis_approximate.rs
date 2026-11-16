@@ -1,8 +1,21 @@
 //! Bounded off-RT scalar fallback. No beat/phase or precise acceptance authority.
 use super::qm_corroboration::{Choice, Failure};
 use super::*;
+use flitzis_looper_analysis::{AnalysisConfig, analyze_bpm_raw, calculate_bpm};
 
 const RESERVE: usize = 2 * 1024 * 1024;
+const MAX_QM_BEATS: usize = 250_000;
+
+pub(super) fn valid_bpm(bpm: f64) -> bool {
+    bpm.is_finite() && (30.0..=300.0).contains(&bpm)
+}
+
+pub(super) fn precise_header(tree: &Value) -> serde_json::Map<String, Value> {
+    ["schema_version", "backend", "policy", "status", "bpm"]
+        .into_iter()
+        .map(|key| (key.to_owned(), tree[key].clone()))
+        .collect()
+}
 
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), Failure> {
     if cancelled() {
@@ -175,30 +188,26 @@ pub(super) fn attempt(
     sample: &CompletePcm<'_>,
     rate: u32,
     range: Option<BpmRange>,
-    original: &str,
+    original: &Value,
     rejection: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Choice, Failure> {
     check(cancelled)?;
     // Covers parse tree, intervals, <=6000 novelty values/JSON, encoding coexistence.
-    let required = original
-        .len()
-        .checked_mul(32)
-        .and_then(|v| v.checked_add(RESERVE))
+    let required = super::super::neural_analysis::budget::value_tree(original)
+        .map_err(Failure::Unavailable)?
+        .checked_add(RESERVE)
         .ok_or_else(|| Failure::Unavailable("approximate preparation extent overflow".into()))?;
     let _preparation = reserve_workspace(required).map_err(Failure::Unavailable)?;
-    let mut tree: Value =
-        serde_json::from_str(original).map_err(|e| Failure::Unavailable(e.to_string()))?;
-    if tree["bpm"].as_f64().is_some() {
+    if original["bpm"].as_f64().is_some() {
         return Err(Failure::NoChoice);
     }
-    let header = if tree["policy"] == "neural-unavailable" {
+    let header = if original["policy"] == "neural-unavailable" {
         Value::Null
     } else {
-        json!({"schema_version":tree["schema_version"],"backend":tree["backend"],
-            "policy":tree["policy"],"status":tree["status"],"bpm":null})
+        Value::Object(precise_header(original))
     };
-    let (kind, period, windows) = if let Some((kind, period)) = neural(&tree) {
+    let (kind, period, windows) = if let Some((kind, period)) = neural(original) {
         (kind, period, json!([]))
     } else if let Some((period, windows)) = energy(sample, rate, cancelled)? {
         ("source_energy", period, windows)
@@ -206,20 +215,121 @@ pub(super) fn attempt(
         return Err(Failure::NoChoice);
     };
     let bpm = 60.0 / period;
-    if !bpm.is_finite() || !(30.0..=300.0).contains(&bpm) || range.is_some_and(|r| !r.contains(bpm))
+    if !valid_bpm(bpm) || range.is_some_and(|r| !r.contains(bpm)) {
+        return Err(Failure::NoChoice);
+    }
+    encode(
+        original.clone(),
+        bpm,
+        json!({"kind":kind,"original":header,
+        "precise_rejection":rejection.chars().take(512).collect::<String>(),
+        "period_seconds":period,"energy_windows":windows,
+        "range_constraint":range.map(range_evidence)}),
+        cancelled,
+    )
+}
+
+fn range_evidence(range: BpmRange) -> Value {
+    json!({"minimum_bpm":range.minimum_bpm,"maximum_bpm":range.maximum_bpm})
+}
+
+fn has_onsets(samples: &[f64], cancelled: &impl Fn() -> bool) -> Result<bool, Failure> {
+    let mut previous = None;
+    let mut increases = 0;
+    for frame in samples.chunks_exact(441) {
+        check(cancelled)?;
+        let level = frame.iter().map(|v| v.abs()).sum::<f64>() / 441.0;
+        if previous.is_some_and(|last: f64| level - last > (0.25 * last).max(1e-7)) {
+            increases += 1;
+            if increases >= 4 {
+                return Ok(true);
+            }
+        }
+        previous = Some(level);
+    }
+    Ok(false)
+}
+
+/// Use the legacy QM tempo calculation after the existing policies have declined.
+/// Retain its detector positions solely as evidence for the scalar.
+pub(super) fn conventional(
+    sample: &CompletePcm<'_>,
+    rate: u32,
+    range: Option<BpmRange>,
+    original: &Value,
+    rejection: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Choice, Failure> {
+    check(cancelled)?;
+    let mono = original["mono_sha256"].as_str().ok_or(Failure::NoChoice)?;
+    let working = super::super::analysis_pcm::qm_working_bytes(sample.frame_count(), rate)
+        .map_err(|err| Failure::Unavailable(err.to_string()))?;
+    let _workspace = reserve_workspace(working).map_err(Failure::Unavailable)?;
+    let prepared =
+        super::super::analysis_pcm::prepare_qm_input(sample, rate, mono, working, cancelled)
+            .map_err(|err| match err {
+                super::super::analysis_pcm::PcmError::Cancelled => Failure::Cancelled,
+                _ => Failure::Unavailable(err.to_string()),
+            })?;
+    if !has_onsets(&prepared.samples, cancelled)? {
+        return Err(Failure::NoChoice);
+    }
+    check(cancelled)?;
+    let raw = std::panic::catch_unwind(|| {
+        analyze_bpm_raw(&prepared.samples, 44_100, &AnalysisConfig::default())
+    })
+    .map_err(|_| Failure::Unavailable("QM analysis panicked".into()))?
+    .map_err(Failure::Unavailable)?;
+    check(cancelled)?;
+    drop(prepared);
+    let beats = raw.beat_frames();
+    let hop = raw.odf_hop_samples();
+    let extent = raw.input_frame_count() as f64 / hop as f64;
+    if !(5..=MAX_QM_BEATS).contains(&beats.len())
+        || !beats.iter().all(|beat| (0.0..extent).contains(beat))
+        || beats.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return Err(Failure::NoChoice);
     }
+    let bpm = f64::from(calculate_bpm(beats, hop as f64 / 44_100.0));
+    if !valid_bpm(bpm) || range.is_some_and(|r| !r.contains(bpm)) {
+        return Err(Failure::NoChoice);
+    }
+    let evidence_bytes = beats.len().checked_mul(64).ok_or(Failure::NoChoice)?;
+    let _evidence = reserve_workspace(evidence_bytes).map_err(Failure::Unavailable)?;
+    let mut source = json!({
+        "model_sha256": original["model_sha256"], "frontend_id": original["frontend_id"],
+        "source_sha256": original["source_sha256"], "mono_sha256": mono,
+        "sample_rate_hz": rate, "frame_count": sample.frame_count(),
+        "selected": null, "regions": [], "raw_beats": [], "raw_downbeats": [],
+    });
+    if let Some(execution) = original.get("execution") {
+        source["execution"] = execution.clone();
+    }
+    encode(
+        source,
+        bpm,
+        json!({"kind":"qm_beat_intervals","original":null,
+        "precise_rejection":rejection.chars().take(512).collect::<String>(),
+        "period_seconds":60.0 / bpm,"energy_windows":[],"qm_beat_frames":beats,
+        "range_constraint":range.map(range_evidence)}),
+        cancelled,
+    )
+}
+
+fn encode(
+    mut tree: Value,
+    bpm: f64,
+    evidence: Value,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Choice, Failure> {
     let fields = tree.as_object_mut().ok_or(Failure::NoChoice)?;
     fields.insert("schema_version".into(), json!(11));
     fields.insert("backend".into(), json!("source_approximate"));
     fields.insert("policy".into(), json!("source-approximate-tempo-v11"));
     fields.insert("status".into(), json!("approximate_estimate"));
     fields.insert("bpm".into(), json!(bpm));
-    fields.insert("approximate_tempo".into(), json!({"kind":kind,"original":header,
-        "precise_rejection":rejection.chars().take(512).collect::<String>(),
-        "period_seconds":period,"energy_windows":windows,
-        "range_constraint":range.map(|r| json!({"minimum_bpm":r.minimum_bpm,"maximum_bpm":r.maximum_bpm}))}));
+    fields.insert("approximate_tempo".into(), evidence);
     check(cancelled)?;
     let length = super::super::neural_analysis::budget::serialized_len(&tree)
         .map_err(Failure::Unavailable)?;

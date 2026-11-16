@@ -144,6 +144,9 @@ def _parse_sample_analysis(analysis: object) -> SampleAnalysis | None:
 
 def _require_fresh_tempo_provenance(analysis: object, parsed: SampleAnalysis | None) -> None:
     """Historical recovery is lenient; a present fresh proof must survive validation."""
+    if parsed is not None and parsed.bpm != 0.0 and normalize_bpm(parsed.bpm) is None:
+        message = "Fresh analysis returned an invalid BPM"
+        raise ValueError(message)
     if not isinstance(analysis, dict) or analysis.get("bpm_method") is None:
         return
     method = parsed.bpm_method if parsed is not None else None
@@ -1530,10 +1533,18 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._valid_analysis_request_id(key_request_id) and not key_completed
             ):
                 analysis = self._analysis_preserving_key(sample_id, analysis)
-            if parsed is None or not self._retain_precise_before_mean(sample_id, parsed.bpm_method):
-                self._store_sample_analysis(sample_id, analysis)
-            else:
+            previous = self._project.sample_analysis[sample_id]
+            if parsed is not None and (
+                self._retain_precise_before_mean(sample_id, parsed.bpm_method)
+                or (
+                    normalize_bpm(parsed.bpm) is None
+                    and previous is not None
+                    and normalize_bpm(previous.bpm) is not None
+                )
+            ):
                 self._merge_completed_analysis_key(sample_id, parsed, key_completed=key_completed)
+            else:
+                self._store_sample_analysis(sample_id, analysis)
             if key_completed:
                 self._mark_project_changed()
             return key_error

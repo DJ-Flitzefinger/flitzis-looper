@@ -453,18 +453,25 @@ pub(super) fn analyze_neural(
                     "status":"insufficient","bpm":null,"selected":null,"regions":[],
                     "model_sha256":model["sha256"],"frontend_id":model["frontend_id"],
                     "source_sha256":source_digest,"mono_sha256":mono_sha256,"sample_rate_hz":rate,
-                    "frame_count":frames,"raw_beats":[],"raw_downbeats":[]}).to_string();
-                let choice = approximate::attempt(sample,rate,automatic_range,&original,&error,&cancelled);
+                    "frame_count":frames,"raw_beats":[],"raw_downbeats":[]});
+                let choice = match approximate::attempt(sample,rate,automatic_range,&original,&error,&cancelled) {
+                    Ok(choice) => Ok(choice),
+                    Err(qm_corroboration::Failure::Cancelled) => return Err("neural analysis request superseded".into()),
+                    Err(_) => approximate::conventional(sample,rate,automatic_range,&original,&error,&cancelled),
+                };
                 if cancelled() { return Err("neural analysis request superseded".into()); }
                 return match choice {
                     Ok(choice) => Ok(LoadedAnalysis { bpm:choice.bpm,key,key_status,key_error,
                         beat_grid:flitzis_looper_analysis::BeatGrid { beats:vec![],downbeats:vec![],bars:vec![] },
                         bpm_method_json:Some(choice.method_json),beat_error:Some(error) }),
                     Err(qm_corroboration::Failure::Cancelled) => Err("neural analysis request superseded".into()),
-                    Err(_) if tempo_only => Err(error),
-                    Err(_) => Ok(LoadedAnalysis { bpm:0.0,key,key_status,key_error,
-                        beat_grid:flitzis_looper_analysis::BeatGrid { beats:vec![],downbeats:vec![],bars:vec![] },
-                        bpm_method_json:None,beat_error:Some(error) }),
+                    Err(failure) => {
+                        let error = format!("{error}; conventional BPM unavailable: {failure}");
+                        if tempo_only { return Err(error); }
+                        Ok(LoadedAnalysis { bpm:0.0,key,key_status,key_error,
+                            beat_grid:flitzis_looper_analysis::BeatGrid { beats:vec![],downbeats:vec![],bars:vec![] },
+                            bpm_method_json:None,beat_error:Some(error) })
+                    }
                 };
             },
         };
@@ -524,6 +531,8 @@ pub(super) fn analyze_neural(
         drop(metadata_workspace);
         drop(core_metadata_workspace);
         let base_string_capacity = base_method_json.capacity();
+        let precise_header = (phase_period.is_some() || completed_conflict)
+            .then(|| approximate::precise_header(&method));
         let mut selected_bpm = estimate_bpm;
         let mut beat_error = estimate_bpm.is_none().then(||format!("Neural tempo estimate {estimate_status}"));
         let method_json = if let Some(period) = phase_period {
@@ -574,7 +583,15 @@ pub(super) fn analyze_neural(
         // A separate scalar-only fallback never relabels a failed precision gate.
         let mut scalar_only = false;
         let method_json = if selected_bpm.is_none() {
-            match approximate::attempt(sample,rate,automatic_range,&method_json,
+            // An optional serializer can fail after modifying these fields.
+            // Reuse the original in-memory numbers for strict replay in Python.
+            if let Some(header) = precise_header {
+                let fields = method.as_object_mut().ok_or("neural estimate envelope missing")?;
+                fields.extend(header);
+                fields.remove("qm_corroboration");
+                fields.remove("tempo_fallback");
+            }
+            match approximate::attempt(sample,rate,automatic_range,&method,
                 beat_error.as_deref().unwrap_or("Precise automatic tempo unavailable"),&cancelled) {
                 Ok(choice) => { selected_bpm=Some(choice.bpm);beat_error=None;scalar_only=true;choice.method_json },
                 Err(qm_corroboration::Failure::Cancelled) => return Err("neural analysis request superseded".into()),
@@ -583,7 +600,7 @@ pub(super) fn analyze_neural(
         } else {method_json};
         // Accurate primary period is independent of musical half/double choice.
         // Fresh publication never probes or executes the optional nominal model.
-        let method_json = if let Some((range, primary_bpm)) = automatic_range.zip(selected_bpm)
+        let mut method_json = if let Some((range, primary_bpm)) = automatic_range.zip(selected_bpm)
             .filter(|(range,bpm)| !range.contains(*bpm)) {
             let primary_core = super::neural_analysis::budget::value_tree(&method).and_then(|tree| {
                 let strings = method_json.capacity().checked_mul(2).ok_or("range method budget overflow")?;
@@ -605,6 +622,27 @@ pub(super) fn analyze_neural(
             beat_error=choice.beat_error;
             choice.method_json
         } else { Some(method_json) };
+        if selected_bpm.is_some_and(|bpm| !approximate::valid_bpm(bpm)) {
+            selected_bpm = None;
+            method_json = None;
+            beat_error = Some("Automatic detector returned an invalid BPM".into());
+        }
+        if selected_bpm.is_none() {
+            match approximate::conventional(sample,rate,automatic_range,&method,
+                beat_error.as_deref().unwrap_or("Automatic tempo unavailable"),&cancelled) {
+                Ok(choice) => {
+                    selected_bpm = Some(choice.bpm);
+                    method_json = Some(choice.method_json);
+                    scalar_only = true;
+                    beat_error = None;
+                },
+                Err(qm_corroboration::Failure::Cancelled) => return Err("neural analysis request superseded".into()),
+                Err(failure) => {
+                    let reason = beat_error.as_deref().unwrap_or("Automatic tempo unavailable");
+                    beat_error = Some(format!("{reason}; conventional BPM unavailable: {failure}"));
+                },
+            }
+        }
         if selected_bpm.is_none() {
             if let Some(range) = automatic_range {
                 if beat_error.as_ref().is_none_or(|reason| !reason.starts_with("No automatic BPM within")) {

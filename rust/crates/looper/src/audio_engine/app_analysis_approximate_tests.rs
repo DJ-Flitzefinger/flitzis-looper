@@ -32,19 +32,21 @@ fn approximate_reuses_rejected_period_without_relabelling_precision() {
     base["ordinal_fit"] = json!({"winner":{"period_seconds":0.6666348364905366},
         "candidate_limit_reached":false,"evidence_tier":"two_ten_second",
         "assignments":[0,1,2,3,4,5,6,7],"outcome":"insufficient"});
+    base["ordinal_fit"]["winner"]["global"] = json!({"window_seconds":[0.0, 233.29960416666665]});
     let before = base.clone();
     let sample = clicks(8000, 120.0, 10);
     let chosen = attempt(
         &sample,
         8000,
         None,
-        &base.to_string(),
+        &base,
         "QM same-period agreement failed",
         &|| false,
     )
     .unwrap();
     assert_eq!(chosen.bpm, 60.0 / 0.6666348364905366);
     assert_eq!(base, before);
+    assert!(chosen.method_json.contains("[0.0,233.29960416666665]"));
     let method: Value = serde_json::from_str(&chosen.method_json).unwrap();
     assert_eq!(method["status"], "approximate_estimate");
     assert_eq!(method["ordinal_fit"]["outcome"], "insufficient");
@@ -54,8 +56,52 @@ fn approximate_reuses_rejected_period_without_relabelling_precision() {
     assert!(method.get("execution").is_none());
     let range = BpmRange::configured(true, 100.0, 140.0).unwrap();
     assert!(matches!(
-        attempt(&sample, 8000, range, &base.to_string(), "failed", &|| false),
+        attempt(&sample, 8000, range, &base, "failed", &|| false),
         Err(Failure::NoChoice)
+    ));
+}
+
+#[test]
+fn conventional_qm_supplies_scalar_after_short_source_energy_refusal() {
+    let stereo = clicks(44_100, 120.0, 7);
+    let samples: Vec<_> = stereo.samples.iter().step_by(2).copied().collect();
+    let mono = samples.iter().fold(Sha256::new(), |mut digest, value| {
+        digest.update(value.to_le_bytes());
+        digest
+    });
+    let sample = CompletePcm {
+        channels: 1,
+        samples: samples.into(),
+    };
+    let mut base = empty();
+    base["mono_sha256"] = json!(format!("{:x}", mono.finalize()));
+    base["sample_rate_hz"] = json!(44_100);
+    base["frame_count"] = json!(sample.frame_count());
+    assert!(matches!(
+        attempt(&sample, 44_100, None, &base, "failed", &|| false),
+        Err(Failure::NoChoice)
+    ));
+    let choice = conventional(&sample, 44_100, None, &base, "failed", &|| false).unwrap();
+    assert!((115.0..=125.0).contains(&choice.bpm));
+    assert!(
+        choice
+            .method_json
+            .contains("\"kind\":\"qm_beat_intervals\"")
+    );
+    if let Some(root) = std::env::var_os("FLITZIS_APPROXIMATE_EVIDENCE_DIR") {
+        let root = std::path::PathBuf::from(root);
+        assert!(root.is_absolute());
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("qm-conventional.json"), choice.method_json).unwrap();
+    }
+    let range = BpmRange::configured(true, 130.0, 160.0).unwrap();
+    assert!(matches!(
+        conventional(&sample, 44_100, range, &base, "failed", &|| false),
+        Err(Failure::NoChoice)
+    ));
+    assert!(matches!(
+        conventional(&sample, 44_100, None, &base, "failed", &|| true),
+        Err(Failure::Cancelled)
     ));
 }
 
@@ -81,14 +127,9 @@ fn bounded_energy_supports_fractional_tempo_rates_and_opposite_stereo() {
             let mut base = empty();
             base["sample_rate_hz"] = json!(rate);
             base["frame_count"] = json!(sample.frame_count());
-            let chosen = attempt(
-                &sample,
-                rate,
-                None,
-                &base.to_string(),
-                "inference unavailable",
-                &|| false,
-            )
+            let chosen = attempt(&sample, rate, None, &base, "inference unavailable", &|| {
+                false
+            })
             .unwrap();
             let method: Value = serde_json::from_str(&chosen.method_json).unwrap();
             assert_eq!(method["approximate_tempo"]["original"], Value::Null);
@@ -155,14 +196,9 @@ fn source_windows_cover_quiet_intro_and_nearly_tied_different_tempos() {
     sample.samples = mixed.into();
     let mut base = empty();
     base["frame_count"] = json!(sample.frame_count());
-    let choice = attempt(
-        &sample,
-        8000,
-        None,
-        &base.to_string(),
-        "inference unavailable",
-        &|| false,
-    )
+    let choice = attempt(&sample, 8000, None, &base, "inference unavailable", &|| {
+        false
+    })
     .unwrap();
     assert!([100.0, 120.0].iter().any(|v| (choice.bpm - v).abs() < 0.01));
     if let Some(root) = std::env::var_os("FLITZIS_APPROXIMATE_EVIDENCE_DIR") {
@@ -186,7 +222,10 @@ fn replay_saved_and_interval_packets_through_native_wrapper() {
     assert!(root.is_absolute());
     let sample = clicks(8000, 120.0, 10);
     for name in ["period", "interval"] {
-        let original = std::fs::read_to_string(root.join(format!("{name}-input.json"))).unwrap();
+        let original = serde_json::from_reader(
+            std::fs::File::open(root.join(format!("{name}-input.json"))).unwrap(),
+        )
+        .unwrap();
         let choice = attempt(
             &sample,
             8000,
@@ -213,16 +252,12 @@ fn unusable_corrupt_cancelled_and_unadmitted_sources_never_invent_tempo() {
     assert!(energy(&short, 8000, &|| false).unwrap().is_none());
     let sample = clicks(8000, 120.0, 10);
     assert!(matches!(
-        attempt(&sample, 8000, None, &empty().to_string(), "failed", &|| {
-            true
-        }),
+        attempt(&sample, 8000, None, &empty(), "failed", &|| { true }),
         Err(Failure::Cancelled)
     ));
     let refused = TEST_WORKSPACE_CEILING.with(|ceiling| {
         ceiling.set(Some(0));
-        let result = attempt(&sample, 8000, None, &empty().to_string(), "failed", &|| {
-            false
-        });
+        let result = attempt(&sample, 8000, None, &empty(), "failed", &|| false);
         ceiling.set(None);
         result
     });
